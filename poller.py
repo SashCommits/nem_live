@@ -125,11 +125,35 @@ def extract(kind: str, raw: bytes) -> dict[str, pd.DataFrame]:
 # --------------------------------------------------------------------------
 # Rolling store
 # --------------------------------------------------------------------------
+def roll_up_hourly(price: pd.DataFrame, demand: pd.DataFrame) -> pd.DataFrame:
+    """Hourly per-region summary of the 5-minute tables.
+
+    w_sum/d_sum are carried alongside the means so a group of regions can be
+    reduced to one demand-weighted price, the same way build_region does it.
+    """
+    if price.empty or demand.empty or "DISPATCHABLEGENERATION" not in demand.columns:
+        return pd.DataFrame()
+    m = demand.merge(price, on=["SETTLEMENTDATE", "REGIONID"]).dropna(subset=["TOTALDEMAND", "RRP"])
+    if m.empty:
+        return pd.DataFrame()
+    m = m.copy()
+    m["w"] = m["RRP"] * m["TOTALDEMAND"]
+    m["hour"] = m["SETTLEMENTDATE"].dt.floor("h")
+    return m.groupby(["hour", "REGIONID"]).agg(
+        demand=("TOTALDEMAND", "mean"),
+        supply=("DISPATCHABLEGENERATION", "mean"),
+        w_sum=("w", "sum"),
+        d_sum=("TOTALDEMAND", "sum"),
+    ).reset_index()
+
+
 class Store:
-    def __init__(self, root: Path, keep_days: int):
+    def __init__(self, root: Path, keep_days: int, hourly_keep_days: int = 400):
         self.root, self.keep = root, timedelta(days=keep_days)
+        self.hourly_keep = timedelta(days=hourly_keep_days)
         self.root.mkdir(parents=True, exist_ok=True)
         self.tables = {n: self._read(n) for n in KEYS}
+        self.hourly = self._read("hourly")
         state = root / "state.json"
         self.seen = set(json.loads(state.read_text())) if state.exists() else set()
 
@@ -141,6 +165,18 @@ class Store:
         cur = self.tables[name]
         self.tables[name] = pd.concat([cur, df]).drop_duplicates(KEYS[name], keep="last")
 
+    def update_hourly(self):
+        """Fold the current 5-minute window into the long-run hourly history.
+
+        The newest hour is still filling, so recompute rather than append:
+        keep="last" lets each run supersede its own earlier partial hour.
+        """
+        new = roll_up_hourly(self.tables["price"], self.tables["demand"])
+        if new.empty:
+            return
+        self.hourly = (pd.concat([self.hourly, new]) if not self.hourly.empty else new) \
+            .drop_duplicates(["hour", "REGIONID"], keep="last").sort_values(["hour", "REGIONID"])
+
     def save(self):
         for name, df in self.tables.items():
             if df.empty:
@@ -149,6 +185,10 @@ class Store:
             df = df[df[TIMECOL[name]] >= cutoff].reset_index(drop=True)
             self.tables[name] = df
             df.to_parquet(self.root / f"{name}.parquet", index=False)
+        if not self.hourly.empty:
+            cutoff = self.hourly["hour"].max() - self.hourly_keep
+            self.hourly = self.hourly[self.hourly["hour"] >= cutoff].reset_index(drop=True)
+            self.hourly.to_parquet(self.root / "hourly.parquet", index=False)
         # Only remember files still inside NEMWeb's ~2-day Current window.
         cutoff = (market_now() - timedelta(days=3)).strftime("%Y%m%d%H%M")
         self.seen = {f for f in self.seen if (m := re.search(r"_(\d{12})", f)) and m.group(1) >= cutoff}
@@ -268,12 +308,57 @@ def build_region(tables, registry, regions, hours) -> dict | None:
     return out
 
 
-def publish(tables, registry, out: Path, hours: int):
+def build_long(hourly: pd.DataFrame, regions, days: int) -> dict | None:
+    """Hourly price/demand/supply for the month/quarter/year views.
+
+    No fuel mix here: that needs per-unit SCADA, which is only kept for the
+    short window.
+    """
+    if hourly.empty:
+        return None
+    h = hourly[hourly["REGIONID"].isin(regions)]
+    if h.empty:
+        return None
+    g = h.groupby("hour").agg(
+        demand=("demand", lambda s: s.sum(min_count=1)),
+        supply=("supply", lambda s: s.sum(min_count=1)),
+        w=("w_sum", "sum"),
+        d=("d_sum", "sum"),
+    )
+    if g.empty:
+        return None
+    g["price"] = g["w"] / g["d"].replace(0, pd.NA)
+
+    last = g.index.max()
+    idx = pd.date_range(last - timedelta(days=days) + timedelta(hours=1), last, freq="h")
+    g = g.reindex(idx)
+
+    def col(s, nd=0):
+        return [None if pd.isna(v) else round(float(v), nd) for v in s]
+
+    return {
+        "updated": market_now().strftime("%Y-%m-%d %H:%M"),
+        "latest": last.strftime("%Y-%m-%d %H:%M"),
+        "interval_minutes": 60,
+        "timezone": "AEST (market time)",
+        "t": [ts.strftime("%Y-%m-%d %H:%M") for ts in idx],
+        "fuels": [],
+        "series": {},
+        "demand": col(g["demand"]),
+        "supply": col(g["supply"]),
+        "price": col(g["price"], 2),
+    }
+
+
+def publish(store: "Store", registry, out: Path, hours: int, long_days: int):
     out.mkdir(parents=True, exist_ok=True)
     for key, regs in REGIONS.items():
-        data = build_region(tables, registry, regs, hours)
+        data = build_region(store.tables, registry, regs, hours)
         if data:
             atomic_write(out / f"{key}.json", json.dumps(data, separators=(",", ":")))
+        long = build_long(store.hourly, regs, long_days)
+        if long:
+            atomic_write(out / f"{key}-long.json", json.dumps(long, separators=(",", ":")))
 
 
 # --------------------------------------------------------------------------
@@ -297,6 +382,7 @@ def poll_once(http, store: Store, backfill: timedelta):
                 store.seen.add(url.rsplit("/", 1)[-1])
             except Exception as exc:
                 log.warning("Skipped %s: %s", url, exc)
+    store.update_hourly()
     store.save()
 
 
@@ -307,18 +393,20 @@ def main():
     ap.add_argument("--keep-days", type=int, default=7)
     ap.add_argument("--publish-hours", type=int, default=168, help="history included in the JSON")
     ap.add_argument("--backfill-hours", type=int, default=48)
+    ap.add_argument("--long-days", type=int, default=366, help="history included in the hourly JSON")
+    ap.add_argument("--hourly-keep-days", type=int, default=400)
     ap.add_argument("--once", action="store_true")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     http = session()
-    store = Store(Path(args.data), args.keep_days)
+    store = Store(Path(args.data), args.keep_days, args.hourly_keep_days)
     while True:
         started = time.time()
         try:
             poll_once(http, store, timedelta(hours=args.backfill_hours))
             registry = load_registry(Path(args.data))
-            publish(store.tables, registry, Path(args.out), args.publish_hours)
+            publish(store, registry, Path(args.out), args.publish_hours, args.long_days)
             log.info("Published %s", store.tables["price"]["SETTLEMENTDATE"].max() if not store.tables["price"].empty else "nothing yet")
         except Exception:
             log.exception("Poll failed")
