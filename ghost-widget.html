@@ -1,0 +1,206 @@
+<!-- PowerSocket Live NEM widget -->
+<div id="nemlive" class="nemlive" data-src="https://raw.githubusercontent.com/YOUR-GITHUB-NAME/nem_live/data/public/"></div>
+
+<style>
+.nemlive{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;max-width:920px;margin:0 auto}
+.nemlive .nl-controls{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between;margin-bottom:.75rem}
+.nemlive .nl-group{display:flex;gap:.25rem;flex-wrap:wrap}
+.nemlive button.nl-btn{border:1px solid #d0d5dd;background:#fff;color:#333;border-radius:6px;padding:.3rem .7rem;font-size:.85rem;cursor:pointer}
+.nemlive button.nl-btn.active{background:#111;color:#fff;border-color:#111}
+.nemlive .nl-stats{display:flex;gap:1.5rem;flex-wrap:wrap;margin:.5rem 0 1rem}
+.nemlive .nl-stat{min-width:110px}
+.nemlive .nl-stat .nl-label{font-size:.75rem;color:#666;text-transform:uppercase;letter-spacing:.03em}
+.nemlive .nl-stat .nl-value{font-size:1.3rem;font-weight:600}
+.nemlive .nl-chart{width:100%;height:460px}
+.nemlive .nl-meta{font-size:.75rem;color:#888;margin-top:.5rem}
+.nemlive .nl-error{padding:2rem 1rem;text-align:center;color:#a33;background:#fff5f5;border:1px solid #f3c2c2;border-radius:8px}
+</style>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+(function () {
+  var root = document.getElementById("nemlive");
+  if (!root || !root.dataset.src) return;
+  var dataSrc = root.dataset.src.replace(/\/?$/, "/");
+
+  var REGIONS = [
+    { key: "nem", label: "NEM" },
+    { key: "nsw1", label: "NSW" },
+    { key: "qld1", label: "QLD" },
+    { key: "vic1", label: "VIC" },
+    { key: "sa1", label: "SA" },
+    { key: "tas1", label: "TAS" }
+  ];
+  var RANGES = [
+    { key: "24h", label: "24h", hours: 24 },
+    { key: "3d", label: "3d", hours: 72 },
+    { key: "7d", label: "7d", hours: 168 }
+  ];
+  var RENEWABLE = ["Bioenergy", "Hydro", "Wind", "Solar (utility)", "Solar (rooftop)"];
+
+  var state = { region: "nem", range: "24h", cache: {} };
+
+  root.innerHTML =
+    '<div class="nl-controls">' +
+    '<div class="nl-group" data-role="regions"></div>' +
+    '<div class="nl-group" data-role="ranges"></div>' +
+    "</div>" +
+    '<div class="nl-stats" data-role="stats"></div>' +
+    '<div class="nl-chart" data-role="chart"></div>' +
+    '<div class="nl-meta" data-role="meta"></div>';
+
+  var regionsEl = root.querySelector('[data-role="regions"]');
+  var rangesEl = root.querySelector('[data-role="ranges"]');
+  var statsEl = root.querySelector('[data-role="stats"]');
+  var chartEl = root.querySelector('[data-role="chart"]');
+  var metaEl = root.querySelector('[data-role="meta"]');
+
+  REGIONS.forEach(function (r) {
+    var b = document.createElement("button");
+    b.className = "nl-btn" + (r.key === state.region ? " active" : "");
+    b.textContent = r.label;
+    b.addEventListener("click", function () {
+      state.region = r.key;
+      setActive(regionsEl, b);
+      render();
+    });
+    regionsEl.appendChild(b);
+  });
+
+  RANGES.forEach(function (r) {
+    var b = document.createElement("button");
+    b.className = "nl-btn" + (r.key === state.range ? " active" : "");
+    b.textContent = r.label;
+    b.addEventListener("click", function () {
+      state.range = r.key;
+      setActive(rangesEl, b);
+      render();
+    });
+    rangesEl.appendChild(b);
+  });
+
+  function setActive(group, active) {
+    Array.prototype.forEach.call(group.children, function (el) {
+      el.classList.toggle("active", el === active);
+    });
+  }
+
+  function showError(message) {
+    chartEl.innerHTML = '<div class="nl-error">' + message + "</div>";
+    statsEl.innerHTML = "";
+    metaEl.textContent = "";
+  }
+
+  function fetchRegion(key) {
+    if (state.cache[key]) return Promise.resolve(state.cache[key]);
+    return fetch(dataSrc + key + ".json", { cache: "no-store" }).then(function (resp) {
+      if (!resp.ok) throw new Error("status " + resp.status);
+      return resp.json();
+    }).then(function (json) {
+      state.cache[key] = json;
+      return json;
+    });
+  }
+
+  function pointsFor(hours, intervalMinutes) {
+    return Math.round((hours * 60) / intervalMinutes);
+  }
+
+  function lastValid(arr) {
+    for (var i = arr.length - 1; i >= 0; i--) {
+      if (arr[i] !== null && arr[i] !== undefined) return arr[i];
+    }
+    return null;
+  }
+
+  function render() {
+    fetchRegion(state.region)
+      .then(function (data) {
+        renderChart(data);
+      })
+      .catch(function () {
+        showError("Live data is unavailable right now.");
+      });
+  }
+
+  function renderChart(data) {
+    var range = RANGES.filter(function (r) { return r.key === state.range; })[0];
+    var n = Math.min(data.t.length, pointsFor(range.hours, data.interval_minutes || 5));
+    var start = data.t.length - n;
+
+    var t = data.t.slice(start);
+    var traces = data.fuels.map(function (f) {
+      return {
+        x: t,
+        y: data.series[f.name].slice(start),
+        name: f.name,
+        stackgroup: "one",
+        mode: "lines",
+        line: { width: 0.5, color: f.color },
+        fillcolor: f.color,
+        hoverinfo: "x+y+name"
+      };
+    });
+    traces.push({
+      x: t,
+      y: data.demand.slice(start),
+      name: "Demand",
+      mode: "lines",
+      line: { width: 2, color: "#111", dash: "dot" },
+      hoverinfo: "x+y+name"
+    });
+    traces.push({
+      x: t,
+      y: data.price.slice(start),
+      name: "Price ($/MWh)",
+      mode: "lines",
+      yaxis: "y2",
+      line: { width: 1.5, color: "#c0392b" },
+      hoverinfo: "x+y+name"
+    });
+
+    Plotly.newPlot(
+      chartEl,
+      traces,
+      {
+        margin: { t: 20, r: 50, b: 40, l: 50 },
+        showlegend: true,
+        legend: { orientation: "h", y: -0.15 },
+        xaxis: { type: "date" },
+        yaxis: { title: "MW" },
+        yaxis2: { title: "$/MWh", overlaying: "y", side: "right", showgrid: false },
+        hovermode: "x unified"
+      },
+      { responsive: true, displayModeBar: false }
+    );
+
+    var renewableTotal = RENEWABLE.reduce(function (sum, name) {
+      if (!data.series[name]) return sum;
+      var v = lastValid(data.series[name]);
+      return sum + (v || 0);
+    }, 0);
+    var lastDemand = lastValid(data.demand);
+    var lastPrice = lastValid(data.price);
+    var renewableShare = lastDemand ? (100 * renewableTotal) / lastDemand : null;
+
+    statsEl.innerHTML =
+      stat("Price", lastPrice !== null ? "$" + lastPrice.toFixed(0) + "/MWh" : "–") +
+      stat("Demand", lastDemand !== null ? Math.round(lastDemand).toLocaleString() + " MW" : "–") +
+      stat("Renewable share", renewableShare !== null ? renewableShare.toFixed(0) + "%" : "–");
+
+    metaEl.textContent = "Updated " + data.updated + " • " + data.timezone;
+  }
+
+  function stat(label, value) {
+    return (
+      '<div class="nl-stat"><div class="nl-label">' +
+      label +
+      '</div><div class="nl-value">' +
+      value +
+      "</div></div>"
+    );
+  }
+
+  render();
+})();
+</script>
