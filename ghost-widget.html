@@ -34,10 +34,16 @@
     { key: "sa1", label: "SA" },
     { key: "tas1", label: "TAS" }
   ];
+  // Ranges up to 7 days come from the 5-minute file; longer ones from the hourly file.
   var RANGES = [
+    { key: "15m", label: "15 min", hours: 0.25 },
+    { key: "1h", label: "1 hour", hours: 1 },
     { key: "24h", label: "24 hours", hours: 24 },
     { key: "3d", label: "3 days", hours: 72 },
-    { key: "7d", label: "7 days", hours: 168 }
+    { key: "7d", label: "7 days", hours: 168 },
+    { key: "1mo", label: "1 month", hours: 24 * 30, long: true },
+    { key: "1q", label: "1 quarter", hours: 24 * 91, long: true },
+    { key: "1y", label: "1 year", hours: 24 * 365, long: true }
   ];
   var RENEWABLE = ["Bioenergy", "Hydro", "Wind", "Solar (utility)", "Solar (rooftop)"];
   var SUPPLY_COLOR = "#2F9E7E";
@@ -100,13 +106,18 @@
     metaEl.textContent = "";
   }
 
-  function fetchRegion(key) {
-    if (state.cache[key]) return Promise.resolve(state.cache[key]);
-    return fetch(dataSrc + key + ".json", { cache: "no-store" }).then(function (resp) {
+  function currentRange() {
+    return RANGES.filter(function (r) { return r.key === state.range; })[0];
+  }
+
+  function fetchRegion(key, long) {
+    var name = long ? key + "-long" : key;
+    if (state.cache[name]) return Promise.resolve(state.cache[name]);
+    return fetch(dataSrc + name + ".json", { cache: "no-store" }).then(function (resp) {
       if (!resp.ok) throw new Error("status " + resp.status);
       return resp.json();
     }).then(function (json) {
-      state.cache[key] = json;
+      state.cache[name] = json;
       return json;
     });
   }
@@ -119,18 +130,51 @@
     return null;
   }
 
+  // A year of hourly points drawn raw is a solid block of ink, so average into
+  // buckets once a range carries more points than the chart can separate.
+  var MAX_POINTS = 400;
+
+  function bucketize(t, arrays) {
+    var n = t.length;
+    if (n <= MAX_POINTS) return { t: t, arrays: arrays };
+    var step = Math.ceil(n / MAX_POINTS);
+    var outT = [];
+    var outs = arrays.map(function () { return []; });
+    for (var i = 0; i < n; i += step) {
+      var end = Math.min(i + step, n);
+      outT.push(t[i]);
+      for (var a = 0; a < arrays.length; a++) {
+        var sum = 0, count = 0;
+        for (var j = i; j < end; j++) {
+          var v = arrays[a][j];
+          if (v !== null && v !== undefined) { sum += v; count++; }
+        }
+        outs[a].push(count ? sum / count : null);
+      }
+    }
+    return { t: outT, arrays: outs };
+  }
+
+  function round(arr, dp) {
+    var f = Math.pow(10, dp);
+    return arr.map(function (v) { return v === null ? null : Math.round(v * f) / f; });
+  }
+
   function render() {
-    fetchRegion(state.region)
+    var range = currentRange();
+    fetchRegion(state.region, range.long)
       .then(renderChart)
       .catch(function () {
-        showError("Live data is unavailable right now.");
+        showError(range.long
+          ? "Long-range history is not available yet."
+          : "Live data is unavailable right now.");
       });
   }
 
   function renderChart(data) {
-    var range = RANGES.filter(function (r) { return r.key === state.range; })[0];
+    var range = currentRange();
     var perHour = 60 / (data.interval_minutes || 5);
-    var n = Math.min(data.t.length, Math.round(range.hours * perHour));
+    var n = Math.max(2, Math.min(data.t.length, Math.round(range.hours * perHour)));
     var start = data.t.length - n;
     var t = data.t.slice(start);
 
@@ -144,50 +188,40 @@
 
     var fg = getComputedStyle(root).color;
     var grid = "rgba(128,128,128,0.25)";
-    var traces = [];
 
     // Stack first so the supply/demand lines draw on top of it.
+    var specs = [];
     if (state.mix) {
       fuels.forEach(function (f) {
-        traces.push({
-          x: t,
-          y: data.series[f.name].slice(start),
-          name: f.name,
+        specs.push({ name: f.name, values: data.series[f.name], fuel: f });
+      });
+    }
+    if (data.supply) specs.push({ name: "Supply", values: data.supply, color: SUPPLY_COLOR });
+    specs.push({ name: "Demand", values: data.demand, color: fg, dash: "dot" });
+    specs.push({ name: "Price", values: data.price, color: PRICE_COLOR, axis: "y2", dp: 2 });
+
+    var binned = bucketize(t, specs.map(function (s) { return s.values.slice(start); }));
+    var x = binned.t;
+
+    var traces = specs.map(function (s, i) {
+      var y = round(binned.arrays[i], s.dp || 0);
+      if (s.fuel) {
+        return {
+          x: x, y: y, name: s.name,
           stackgroup: "mix",
           mode: "lines",
-          line: { width: 0, color: f.color },
-          fillcolor: f.color,
+          line: { width: 0, color: s.fuel.color },
+          fillcolor: s.fuel.color,
           hoverinfo: "x+y+name"
-        });
-      });
-    }
-
-    if (data.supply) {
-      traces.push({
-        x: t,
-        y: data.supply.slice(start),
-        name: "Supply",
+        };
+      }
+      return {
+        x: x, y: y, name: s.name,
         mode: "lines",
-        line: { width: 2, color: SUPPLY_COLOR },
+        yaxis: s.axis,
+        line: { width: s.name === "Price" ? 1.5 : 2, color: s.color, dash: s.dash },
         hoverinfo: "x+y+name"
-      });
-    }
-    traces.push({
-      x: t,
-      y: data.demand.slice(start),
-      name: "Demand",
-      mode: "lines",
-      line: { width: 2, color: fg, dash: "dot" },
-      hoverinfo: "x+y+name"
-    });
-    traces.push({
-      x: t,
-      y: data.price.slice(start),
-      name: "Price",
-      mode: "lines",
-      yaxis: "y2",
-      line: { width: 1.5, color: PRICE_COLOR },
-      hoverinfo: "x+y+name"
+      };
     });
 
     Plotly.newPlot(
