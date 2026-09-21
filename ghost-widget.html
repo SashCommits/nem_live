@@ -2,18 +2,20 @@
 <div id="nemlive" class="nemlive" data-src="https://raw.githubusercontent.com/YOUR-GITHUB-NAME/nem_live/data/public/"></div>
 
 <style>
-.nemlive{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;max-width:920px;margin:0 auto}
+/* Colours are inherited from the surrounding page so this works on a light or dark theme. */
+.nemlive{font-family:inherit;color:inherit;max-width:920px;margin:0 auto}
 .nemlive .nl-controls{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between;margin-bottom:.75rem}
-.nemlive .nl-group{display:flex;gap:.25rem;flex-wrap:wrap}
-.nemlive button.nl-btn{border:1px solid #d0d5dd;background:#fff;color:#333;border-radius:6px;padding:.3rem .7rem;font-size:.85rem;cursor:pointer}
-.nemlive button.nl-btn.active{background:#111;color:#fff;border-color:#111}
-.nemlive .nl-stats{display:flex;gap:1.5rem;flex-wrap:wrap;margin:.5rem 0 1rem}
+.nemlive .nl-group{display:flex;flex-wrap:wrap;border:1px solid rgba(128,128,128,.4);border-radius:8px;overflow:hidden}
+.nemlive button.nl-btn{border:0;border-right:1px solid rgba(128,128,128,.3);background:transparent;color:inherit;font:inherit;font-size:.9rem;padding:.45rem .9rem;cursor:pointer;opacity:.65}
+.nemlive button.nl-btn:last-child{border-right:0}
+.nemlive button.nl-btn.active{background:rgba(128,128,128,.22);font-weight:600;opacity:1}
+.nemlive .nl-stats{display:flex;gap:2rem;flex-wrap:wrap;margin:1rem 0}
 .nemlive .nl-stat{min-width:110px}
-.nemlive .nl-stat .nl-label{font-size:.75rem;color:#666;text-transform:uppercase;letter-spacing:.03em}
-.nemlive .nl-stat .nl-value{font-size:1.3rem;font-weight:600}
+.nemlive .nl-stat .nl-label{font-size:.9rem;opacity:.6}
+.nemlive .nl-stat .nl-value{font-size:1.5rem;font-weight:600;margin-top:.15rem}
 .nemlive .nl-chart{width:100%;height:460px}
-.nemlive .nl-meta{font-size:.75rem;color:#888;margin-top:.5rem}
-.nemlive .nl-error{padding:2rem 1rem;text-align:center;color:#a33;background:#fff5f5;border:1px solid #f3c2c2;border-radius:8px}
+.nemlive .nl-meta{font-size:.75rem;opacity:.55;margin-top:.5rem}
+.nemlive .nl-error{padding:2rem 1rem;text-align:center;border:1px solid rgba(200,80,80,.5);border-radius:8px;opacity:.9}
 </style>
 
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
@@ -32,9 +34,9 @@
     { key: "tas1", label: "TAS" }
   ];
   var RANGES = [
-    { key: "24h", label: "24h", hours: 24 },
-    { key: "3d", label: "3d", hours: 72 },
-    { key: "7d", label: "7d", hours: 168 }
+    { key: "24h", label: "24 hours", hours: 24 },
+    { key: "3d", label: "3 days", hours: 72 },
+    { key: "7d", label: "7 days", hours: 168 }
   ];
   var RENEWABLE = ["Bioenergy", "Hydro", "Wind", "Solar (utility)", "Solar (rooftop)"];
 
@@ -141,12 +143,15 @@
         hoverinfo: "x+y+name"
       };
     });
+    var fg = getComputedStyle(root).color;
+    var grid = "rgba(128,128,128,0.25)";
+
     traces.push({
       x: t,
       y: data.demand.slice(start),
       name: "Demand",
       mode: "lines",
-      line: { width: 2, color: "#111", dash: "dot" },
+      line: { width: 2, color: fg, dash: "dot" },
       hoverinfo: "x+y+name"
     });
     traces.push({
@@ -155,7 +160,7 @@
       name: "Price ($/MWh)",
       mode: "lines",
       yaxis: "y2",
-      line: { width: 1.5, color: "#c0392b" },
+      line: { width: 1.5, color: "#e8553f" },
       hoverinfo: "x+y+name"
     });
 
@@ -163,11 +168,14 @@
       chartEl,
       traces,
       {
-        margin: { t: 20, r: 50, b: 40, l: 50 },
+        margin: { t: 20, r: 55, b: 40, l: 55 },
         showlegend: true,
         legend: { orientation: "h", y: -0.15 },
-        xaxis: { type: "date" },
-        yaxis: { title: "MW" },
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(0,0,0,0)",
+        font: { color: fg },
+        xaxis: { type: "date", gridcolor: grid, zerolinecolor: grid },
+        yaxis: { title: "MW", gridcolor: grid, zerolinecolor: grid },
         yaxis2: { title: "$/MWh", overlaying: "y", side: "right", showgrid: false },
         hovermode: "x unified"
       },
@@ -184,11 +192,11 @@
     var renewableShare = lastDemand ? (100 * renewableTotal) / lastDemand : null;
 
     statsEl.innerHTML =
-      stat("Price", lastPrice !== null ? "$" + lastPrice.toFixed(0) + "/MWh" : "–") +
-      stat("Demand", lastDemand !== null ? Math.round(lastDemand).toLocaleString() + " MW" : "–") +
-      stat("Renewable share", renewableShare !== null ? renewableShare.toFixed(0) + "%" : "–");
+      stat("Price now", lastPrice !== null ? "$" + lastPrice.toFixed(0) + "/MWh" : "\u2013") +
+      stat("Demand now", lastDemand !== null ? Math.round(lastDemand).toLocaleString() + " MW" : "\u2013") +
+      stat("Renewables now", renewableShare !== null ? renewableShare.toFixed(0) + "%" : "\u2013");
 
-    metaEl.textContent = "Updated " + data.updated + " • " + data.timezone;
+    metaEl.textContent = "Updated " + data.updated + " \u2022 " + data.timezone;
   }
 
   function stat(label, value) {
