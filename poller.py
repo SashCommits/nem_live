@@ -210,7 +210,9 @@ def build_region(tables, registry, regions, hours) -> dict | None:
     p["w"] = p["RRP"] * p["TOTALDEMAND"]
     agg = {"w": ("w", "sum"), "demand": ("TOTALDEMAND", "sum")}
     if "DISPATCHABLEGENERATION" in p.columns:
-        agg["supply"] = ("DISPATCHABLEGENERATION", "sum")
+        # Rows stored before this field was collected are NaN; a plain sum would
+        # report them as a real 0 MW, so leave those intervals empty instead.
+        agg["supply"] = ("DISPATCHABLEGENERATION", lambda s: s.sum(min_count=1))
     m = p.groupby("SETTLEMENTDATE").agg(**agg)
     m["price"] = m["w"] / m["demand"]
     if m.empty:
