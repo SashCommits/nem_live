@@ -1,0 +1,4 @@
+pandas>=2.0
+pyarrow
+requests
+nemosis>=3.8
