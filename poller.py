@@ -100,11 +100,15 @@ def extract(kind: str, raw: bytes) -> dict[str, pd.DataFrame]:
     if kind == "scada" and ("DISPATCH", "UNIT_SCADA") in t:
         out["scada"] = t[("DISPATCH", "UNIT_SCADA")][["SETTLEMENTDATE", "DUID", "SCADAVALUE"]]
     if kind == "dispatchis":
-        for key, name, col in [(("DISPATCH", "PRICE"), "price", "RRP"), (("DISPATCH", "REGIONSUM"), "demand", "TOTALDEMAND")]:
+        # DISPATCHABLEGENERATION is the region's grid-scale supply: it balances exactly
+        # against TOTALDEMAND + NETINTERCHANGE + DISPATCHABLELOAD, and already includes
+        # semi-scheduled wind/solar, so TOTALINTERMITTENTGENERATION must not be added to it.
+        for key, name, cols in [(("DISPATCH", "PRICE"), "price", ["RRP"]),
+                                (("DISPATCH", "REGIONSUM"), "demand", ["TOTALDEMAND", "DISPATCHABLEGENERATION"])]:
             if key in t:
                 df = t[key]
                 df = df[pd.to_numeric(df["INTERVENTION"], errors="coerce").fillna(0) == 0]
-                out[name] = df[["SETTLEMENTDATE", "REGIONID", col]]
+                out[name] = df[["SETTLEMENTDATE", "REGIONID"] + [c for c in cols if c in df.columns]]
     if kind == "rooftop" and ("ROOFTOP", "ACTUAL") in t:
         df = t[("ROOFTOP", "ACTUAL")]
         out["rooftop"] = df[["INTERVAL_DATETIME", "REGIONID", "POWER"]]
@@ -204,7 +208,10 @@ def build_region(tables, registry, regions, hours) -> dict | None:
 
     p = price[price["REGIONID"].isin(regions)].merge(demand, on=["SETTLEMENTDATE", "REGIONID"])
     p["w"] = p["RRP"] * p["TOTALDEMAND"]
-    m = p.groupby("SETTLEMENTDATE").agg(w=("w", "sum"), demand=("TOTALDEMAND", "sum"))
+    agg = {"w": ("w", "sum"), "demand": ("TOTALDEMAND", "sum")}
+    if "DISPATCHABLEGENERATION" in p.columns:
+        agg["supply"] = ("DISPATCHABLEGENERATION", "sum")
+    m = p.groupby("SETTLEMENTDATE").agg(**agg)
     m["price"] = m["w"] / m["demand"]
     if m.empty:
         return None
@@ -243,7 +250,7 @@ def build_region(tables, registry, regions, hours) -> dict | None:
     def col(s, nd=0):
         return [None if pd.isna(v) else round(float(v), nd) for v in s]
 
-    return {
+    out = {
         "updated": market_now().strftime("%Y-%m-%d %H:%M"),
         "latest": last.strftime("%Y-%m-%d %H:%M"),
         "interval_minutes": 5,
@@ -254,6 +261,9 @@ def build_region(tables, registry, regions, hours) -> dict | None:
         "demand": col(m["demand"]),
         "price": col(m["price"], 2),
     }
+    if "supply" in m.columns:
+        out["supply"] = col(m["supply"])
+    return out
 
 
 def publish(tables, registry, out: Path, hours: int):

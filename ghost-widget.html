@@ -9,6 +9,7 @@
 .nemlive button.nl-btn{border:0;border-right:1px solid rgba(128,128,128,.3);background:transparent;color:inherit;font:inherit;font-size:.9rem;padding:.45rem .9rem;cursor:pointer;opacity:.65}
 .nemlive button.nl-btn:last-child{border-right:0}
 .nemlive button.nl-btn.active{background:rgba(128,128,128,.22);font-weight:600;opacity:1}
+.nemlive button.nl-btn[disabled]{opacity:.28;cursor:not-allowed}
 .nemlive .nl-stats{display:flex;gap:2rem;flex-wrap:wrap;margin:1rem 0}
 .nemlive .nl-stat{min-width:110px}
 .nemlive .nl-stat .nl-label{font-size:.9rem;opacity:.6}
@@ -39,13 +40,16 @@
     { key: "7d", label: "7 days", hours: 168 }
   ];
   var RENEWABLE = ["Bioenergy", "Hydro", "Wind", "Solar (utility)", "Solar (rooftop)"];
+  var SUPPLY_COLOR = "#2F9E7E";
+  var PRICE_COLOR = "#E8553F";
 
-  var state = { region: "nem", range: "24h", cache: {} };
+  var state = { region: "nem", range: "24h", mix: false, cache: {} };
 
   root.innerHTML =
     '<div class="nl-controls">' +
     '<div class="nl-group" data-role="regions"></div>' +
     '<div class="nl-group" data-role="ranges"></div>' +
+    '<div class="nl-group" data-role="mix"></div>' +
     "</div>" +
     '<div class="nl-stats" data-role="stats"></div>' +
     '<div class="nl-chart" data-role="chart"></div>' +
@@ -53,39 +57,42 @@
 
   var regionsEl = root.querySelector('[data-role="regions"]');
   var rangesEl = root.querySelector('[data-role="ranges"]');
+  var mixEl = root.querySelector('[data-role="mix"]');
   var statsEl = root.querySelector('[data-role="stats"]');
   var chartEl = root.querySelector('[data-role="chart"]');
   var metaEl = root.querySelector('[data-role="meta"]');
 
-  REGIONS.forEach(function (r) {
-    var b = document.createElement("button");
-    b.className = "nl-btn" + (r.key === state.region ? " active" : "");
-    b.textContent = r.label;
-    b.addEventListener("click", function () {
-      state.region = r.key;
-      setActive(regionsEl, b);
-      render();
-    });
-    regionsEl.appendChild(b);
-  });
-
-  RANGES.forEach(function (r) {
-    var b = document.createElement("button");
-    b.className = "nl-btn" + (r.key === state.range ? " active" : "");
-    b.textContent = r.label;
-    b.addEventListener("click", function () {
-      state.range = r.key;
-      setActive(rangesEl, b);
-      render();
-    });
-    rangesEl.appendChild(b);
-  });
-
-  function setActive(group, active) {
-    Array.prototype.forEach.call(group.children, function (el) {
-      el.classList.toggle("active", el === active);
+  function addButtons(group, items, isActive, onPick) {
+    items.forEach(function (item) {
+      var b = document.createElement("button");
+      b.className = "nl-btn" + (isActive(item) ? " active" : "");
+      b.textContent = item.label;
+      b.addEventListener("click", function () {
+        onPick(item);
+        Array.prototype.forEach.call(group.children, function (el) {
+          el.classList.toggle("active", el === b);
+        });
+        render();
+      });
+      group.appendChild(b);
     });
   }
+
+  addButtons(regionsEl, REGIONS, function (r) { return r.key === state.region; },
+    function (r) { state.region = r.key; });
+  addButtons(rangesEl, RANGES, function (r) { return r.key === state.range; },
+    function (r) { state.range = r.key; });
+
+  var mixBtn = document.createElement("button");
+  mixBtn.className = "nl-btn";
+  mixBtn.textContent = "Energy mix";
+  mixBtn.addEventListener("click", function () {
+    if (mixBtn.disabled) return;
+    state.mix = !state.mix;
+    mixBtn.classList.toggle("active", state.mix);
+    render();
+  });
+  mixEl.appendChild(mixBtn);
 
   function showError(message) {
     chartEl.innerHTML = '<div class="nl-error">' + message + "</div>";
@@ -104,11 +111,8 @@
     });
   }
 
-  function pointsFor(hours, intervalMinutes) {
-    return Math.round((hours * 60) / intervalMinutes);
-  }
-
   function lastValid(arr) {
+    if (!arr) return null;
     for (var i = arr.length - 1; i >= 0; i--) {
       if (arr[i] !== null && arr[i] !== undefined) return arr[i];
     }
@@ -117,9 +121,7 @@
 
   function render() {
     fetchRegion(state.region)
-      .then(function (data) {
-        renderChart(data);
-      })
+      .then(renderChart)
       .catch(function () {
         showError("Live data is unavailable right now.");
       });
@@ -127,25 +129,49 @@
 
   function renderChart(data) {
     var range = RANGES.filter(function (r) { return r.key === state.range; })[0];
-    var n = Math.min(data.t.length, pointsFor(range.hours, data.interval_minutes || 5));
+    var perHour = 60 / (data.interval_minutes || 5);
+    var n = Math.min(data.t.length, Math.round(range.hours * perHour));
     var start = data.t.length - n;
-
     var t = data.t.slice(start);
-    var traces = data.fuels.map(function (f) {
-      return {
-        x: t,
-        y: data.series[f.name].slice(start),
-        name: f.name,
-        stackgroup: "one",
-        mode: "lines",
-        line: { width: 0.5, color: f.color },
-        fillcolor: f.color,
-        hoverinfo: "x+y+name"
-      };
-    });
+
+    var fuels = data.fuels || [];
+    mixBtn.disabled = fuels.length === 0;
+    mixBtn.title = fuels.length ? "" : "Fuel mix data is not available yet";
+    if (mixBtn.disabled) {
+      state.mix = false;
+      mixBtn.classList.remove("active");
+    }
+
     var fg = getComputedStyle(root).color;
     var grid = "rgba(128,128,128,0.25)";
+    var traces = [];
 
+    // Stack first so the supply/demand lines draw on top of it.
+    if (state.mix) {
+      fuels.forEach(function (f) {
+        traces.push({
+          x: t,
+          y: data.series[f.name].slice(start),
+          name: f.name,
+          stackgroup: "mix",
+          mode: "lines",
+          line: { width: 0, color: f.color },
+          fillcolor: f.color,
+          hoverinfo: "x+y+name"
+        });
+      });
+    }
+
+    if (data.supply) {
+      traces.push({
+        x: t,
+        y: data.supply.slice(start),
+        name: "Supply",
+        mode: "lines",
+        line: { width: 2, color: SUPPLY_COLOR },
+        hoverinfo: "x+y+name"
+      });
+    }
     traces.push({
       x: t,
       y: data.demand.slice(start),
@@ -157,10 +183,10 @@
     traces.push({
       x: t,
       y: data.price.slice(start),
-      name: "Price ($/MWh)",
+      name: "Price",
       mode: "lines",
       yaxis: "y2",
-      line: { width: 1.5, color: "#e8553f" },
+      line: { width: 1.5, color: PRICE_COLOR },
       hoverinfo: "x+y+name"
     });
 
@@ -168,33 +194,36 @@
       chartEl,
       traces,
       {
-        margin: { t: 20, r: 55, b: 40, l: 55 },
+        margin: { t: 20, r: 58, b: 40, l: 58 },
         showlegend: true,
         legend: { orientation: "h", y: -0.15 },
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(0,0,0,0)",
         font: { color: fg },
         xaxis: { type: "date", gridcolor: grid, zerolinecolor: grid },
-        yaxis: { title: "MW", gridcolor: grid, zerolinecolor: grid },
+        // The stack has to sit on a zero baseline; the plain lines read better auto-scaled.
+        yaxis: { title: "MW", gridcolor: grid, zerolinecolor: grid, rangemode: state.mix ? "tozero" : "normal" },
         yaxis2: { title: "$/MWh", overlaying: "y", side: "right", showgrid: false },
         hovermode: "x unified"
       },
       { responsive: true, displayModeBar: false }
     );
 
-    var renewableTotal = RENEWABLE.reduce(function (sum, name) {
-      if (!data.series[name]) return sum;
-      var v = lastValid(data.series[name]);
-      return sum + (v || 0);
-    }, 0);
     var lastDemand = lastValid(data.demand);
+    var lastSupply = lastValid(data.supply);
     var lastPrice = lastValid(data.price);
-    var renewableShare = lastDemand ? (100 * renewableTotal) / lastDemand : null;
+    var renewableTotal = RENEWABLE.reduce(function (sum, name) {
+      return sum + (data.series[name] ? lastValid(data.series[name]) || 0 : 0);
+    }, 0);
 
-    statsEl.innerHTML =
+    var html =
       stat("Price now", lastPrice !== null ? "$" + lastPrice.toFixed(0) + "/MWh" : "\u2013") +
       stat("Demand now", lastDemand !== null ? Math.round(lastDemand).toLocaleString() + " MW" : "\u2013") +
-      stat("Renewables now", renewableShare !== null ? renewableShare.toFixed(0) + "%" : "\u2013");
+      stat("Supply now", lastSupply !== null ? Math.round(lastSupply).toLocaleString() + " MW" : "\u2013");
+    if (fuels.length && lastDemand) {
+      html += stat("Renewables now", ((100 * renewableTotal) / lastDemand).toFixed(0) + "%");
+    }
+    statsEl.innerHTML = html;
 
     metaEl.textContent = "Updated " + data.updated + " \u2022 " + data.timezone;
   }
