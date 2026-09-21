@@ -161,6 +161,14 @@ def atomic_write(path: Path, text: str):
 # Registry (DUID -> fuel), refreshed daily via NEMOSIS
 # --------------------------------------------------------------------------
 def load_registry(root: Path) -> pd.DataFrame:
+    """DUID -> Region/fuel registry, refreshed daily via NEMOSIS.
+
+    AEMO's participant-info site blocks requests from many cloud/CI IP
+    ranges (Cloudflare bot protection), so this can fail on hosted
+    runners. Fall back to an empty registry rather than aborting the
+    whole poll: price/demand still publish, just without a fuel-mix
+    breakdown until a refresh succeeds.
+    """
     path = root / "registry.parquet"
     stamp = root / "registry_updated.txt"  # file mtimes don't survive a git checkout
     fresh = path.exists() and stamp.exists() and time.time() - float(stamp.read_text() or 0) < 86400
@@ -180,7 +188,8 @@ def load_registry(root: Path) -> pd.DataFrame:
             log.info("Registry refreshed: %d units", len(df))
         except Exception as exc:
             if not path.exists():
-                raise
+                log.warning("Registry unavailable, publishing without fuel breakdown: %s", exc)
+                return pd.DataFrame(columns=["DUID", "Region", "fuel", "is_load"])
             log.warning("Registry refresh failed, using previous copy: %s", exc)
     return pd.read_parquet(path)
 
@@ -190,27 +199,35 @@ def load_registry(root: Path) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 def build_region(tables, registry, regions, hours) -> dict | None:
     scada, price, demand = tables["scada"], tables["price"], tables["demand"]
-    if scada.empty or price.empty:
+    if price.empty or demand.empty:
         return None
-
-    u = scada.merge(registry, on="DUID", how="inner")
-    u = u[u["Region"].isin(regions) & u["fuel"].notna()].copy()
-    u["MW"] = u["SCADAVALUE"].where(~u["is_load"], -u["SCADAVALUE"].abs())
-    bat = u["fuel"] == "Battery"
-    u.loc[bat & (u["MW"] >= 0), "fuel"] = "Battery (discharging)"
-    u.loc[bat & (u["MW"] < 0), "fuel"] = "Battery (charging)"
-    gen = ~u["fuel"].isin(NEGATIVE)
-    u.loc[gen, "MW"] = u.loc[gen, "MW"].clip(lower=0)
-    stack = u.pivot_table(index="SETTLEMENTDATE", columns="fuel", values="MW", aggfunc="sum")
 
     p = price[price["REGIONID"].isin(regions)].merge(demand, on=["SETTLEMENTDATE", "REGIONID"])
     p["w"] = p["RRP"] * p["TOTALDEMAND"]
     m = p.groupby("SETTLEMENTDATE").agg(w=("w", "sum"), demand=("TOTALDEMAND", "sum"))
     m["price"] = m["w"] / m["demand"]
-
-    if stack.empty or m.empty:
+    if m.empty:
         return None
-    last = min(stack.index.max(), m.index.max())
+    last = m.index.max()
+
+    # Fuel-mix stack needs both scada and a resolved DUID registry; either can be
+    # temporarily unavailable (e.g. AEMO blocking the registry download from a
+    # hosted CI runner), so degrade to price/demand-only rather than publishing nothing.
+    stack = pd.DataFrame(index=pd.DatetimeIndex([], name="SETTLEMENTDATE"))
+    if not scada.empty and not registry.empty:
+        u = scada.merge(registry, on="DUID", how="inner")
+        u = u[u["Region"].isin(regions) & u["fuel"].notna()].copy()
+        if not u.empty:
+            u["MW"] = u["SCADAVALUE"].where(~u["is_load"], -u["SCADAVALUE"].abs())
+            bat = u["fuel"] == "Battery"
+            u.loc[bat & (u["MW"] >= 0), "fuel"] = "Battery (discharging)"
+            u.loc[bat & (u["MW"] < 0), "fuel"] = "Battery (charging)"
+            gen = ~u["fuel"].isin(NEGATIVE)
+            u.loc[gen, "MW"] = u.loc[gen, "MW"].clip(lower=0)
+            stack = u.pivot_table(index="SETTLEMENTDATE", columns="fuel", values="MW", aggfunc="sum")
+            if not stack.empty:
+                last = min(last, stack.index.max())
+
     idx = pd.date_range(last - timedelta(hours=hours) + timedelta(minutes=5), last, freq="5min")
     stack, m = stack.reindex(idx), m.reindex(idx)
 
