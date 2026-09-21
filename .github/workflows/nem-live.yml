@@ -1,0 +1,45 @@
+name: NEM live data
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nem-live
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements.txt
+
+      - name: Restore saved data
+        run: |
+          git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" store || mkdir -p store
+          rm -rf store/.git
+
+      - name: Fetch latest AEMO data
+        run: python poller.py --once --data store --out store/public
+
+      - name: Save data
+        run: |
+          cd store
+          echo "nemosis_cache/" > .gitignore
+          git init -q -b data
+          git add -A
+          git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update $(date -u +%FT%TZ)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data
