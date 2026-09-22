@@ -126,6 +126,49 @@ def extract(kind: str, raw: bytes) -> dict[str, pd.DataFrame]:
 # --------------------------------------------------------------------------
 # Rolling store
 # --------------------------------------------------------------------------
+def fuel_mw(u: pd.DataFrame) -> pd.DataFrame:
+    """Sign-adjust SCADAVALUE into MW generation, splitting batteries by direction.
+
+    Shared by the 5-minute stack (build_region) and the hourly fuel rollup so
+    a load (pumping, battery charging) is always negative and a generator is
+    always clamped to zero rather than dipping negative on noise.
+    """
+    u = u.copy()
+    u["MW"] = u["SCADAVALUE"].where(~u["is_load"], -u["SCADAVALUE"].abs())
+    bat = u["fuel"] == "Battery"
+    u.loc[bat & (u["MW"] >= 0), "fuel"] = "Battery (discharging)"
+    u.loc[bat & (u["MW"] < 0), "fuel"] = "Battery (charging)"
+    gen = ~u["fuel"].isin(NEGATIVE)
+    u.loc[gen, "MW"] = u.loc[gen, "MW"].clip(lower=0)
+    return u
+
+
+def roll_up_hourly_fuels(scada: pd.DataFrame, rooftop: pd.DataFrame, registry: pd.DataFrame) -> pd.DataFrame:
+    """Hourly per-region, per-fuel mean MW, for the month/quarter/year fuel mix.
+
+    Units are summed per 5-minute interval first (a region's instantaneous
+    output for that fuel), then averaged across the hour, the same two-step
+    reduction roll_up_hourly uses for demand and price.
+    """
+    parts = []
+    if not scada.empty and not registry.empty:
+        u = scada.merge(registry, on="DUID", how="inner")
+        u = u[u["fuel"].notna()]
+        if not u.empty:
+            u = fuel_mw(u)
+            parts.append(u.groupby(["SETTLEMENTDATE", "Region", "fuel"])["MW"].sum())
+    if not rooftop.empty:
+        r = rooftop.groupby(["INTERVAL_DATETIME", "REGIONID"])["POWER"].sum()
+        r = r.reset_index().rename(columns={"INTERVAL_DATETIME": "SETTLEMENTDATE", "REGIONID": "Region", "POWER": "MW"})
+        r["fuel"] = "Solar (rooftop)"
+        parts.append(r.set_index(["SETTLEMENTDATE", "Region", "fuel"])["MW"])
+    if not parts:
+        return pd.DataFrame()
+    per_interval = pd.concat(parts).reset_index()
+    per_interval["hour"] = per_interval["SETTLEMENTDATE"].dt.floor("h")
+    return per_interval.groupby(["hour", "Region", "fuel"])["MW"].mean().reset_index()
+
+
 def roll_up_hourly(price: pd.DataFrame, demand: pd.DataFrame) -> pd.DataFrame:
     """Hourly per-region summary of the 5-minute tables.
 
@@ -155,6 +198,7 @@ class Store:
         self.root.mkdir(parents=True, exist_ok=True)
         self.tables = {n: self._read(n) for n in KEYS}
         self.hourly = self._read("hourly")
+        self.hourly_fuels = self._read("hourly_fuels")
         state = root / "state.json"
         self.seen = set(json.loads(state.read_text())) if state.exists() else set()
 
@@ -166,17 +210,21 @@ class Store:
         cur = self.tables[name]
         self.tables[name] = pd.concat([cur, df]).drop_duplicates(KEYS[name], keep="last")
 
-    def update_hourly(self):
+    def update_hourly(self, registry: pd.DataFrame):
         """Fold the current 5-minute window into the long-run hourly history.
 
         The newest hour is still filling, so recompute rather than append:
         keep="last" lets each run supersede its own earlier partial hour.
         """
         new = roll_up_hourly(self.tables["price"], self.tables["demand"])
-        if new.empty:
-            return
-        self.hourly = (pd.concat([self.hourly, new]) if not self.hourly.empty else new) \
-            .drop_duplicates(["hour", "REGIONID"], keep="last").sort_values(["hour", "REGIONID"])
+        if not new.empty:
+            self.hourly = (pd.concat([self.hourly, new]) if not self.hourly.empty else new) \
+                .drop_duplicates(["hour", "REGIONID"], keep="last").sort_values(["hour", "REGIONID"])
+
+        fuels_new = roll_up_hourly_fuels(self.tables["scada"], self.tables["rooftop"], registry)
+        if not fuels_new.empty:
+            self.hourly_fuels = (pd.concat([self.hourly_fuels, fuels_new]) if not self.hourly_fuels.empty else fuels_new) \
+                .drop_duplicates(["hour", "Region", "fuel"], keep="last").sort_values(["hour", "Region", "fuel"])
 
     def save(self):
         for name, df in self.tables.items():
@@ -190,6 +238,10 @@ class Store:
             cutoff = self.hourly["hour"].max() - self.hourly_keep
             self.hourly = self.hourly[self.hourly["hour"] >= cutoff].reset_index(drop=True)
             self.hourly.to_parquet(self.root / "hourly.parquet", index=False)
+        if not self.hourly_fuels.empty:
+            cutoff = self.hourly_fuels["hour"].max() - self.hourly_keep
+            self.hourly_fuels = self.hourly_fuels[self.hourly_fuels["hour"] >= cutoff].reset_index(drop=True)
+            self.hourly_fuels.to_parquet(self.root / "hourly_fuels.parquet", index=False)
         # Only remember files still inside NEMWeb's ~2-day Current window.
         cutoff = (market_now() - timedelta(days=3)).strftime("%Y%m%d%H%M")
         self.seen = {f for f in self.seen if (m := re.search(r"_(\d{12})", f)) and m.group(1) >= cutoff}
@@ -299,14 +351,9 @@ def build_region(tables, registry, regions, hours) -> dict | None:
     stack = pd.DataFrame(index=pd.DatetimeIndex([], name="SETTLEMENTDATE"))
     if not scada.empty and not registry.empty:
         u = scada.merge(registry, on="DUID", how="inner")
-        u = u[u["Region"].isin(regions) & u["fuel"].notna()].copy()
+        u = u[u["Region"].isin(regions) & u["fuel"].notna()]
         if not u.empty:
-            u["MW"] = u["SCADAVALUE"].where(~u["is_load"], -u["SCADAVALUE"].abs())
-            bat = u["fuel"] == "Battery"
-            u.loc[bat & (u["MW"] >= 0), "fuel"] = "Battery (discharging)"
-            u.loc[bat & (u["MW"] < 0), "fuel"] = "Battery (charging)"
-            gen = ~u["fuel"].isin(NEGATIVE)
-            u.loc[gen, "MW"] = u.loc[gen, "MW"].clip(lower=0)
+            u = fuel_mw(u)
             stack = u.pivot_table(index="SETTLEMENTDATE", columns="fuel", values="MW", aggfunc="sum")
             if not stack.empty:
                 last = min(last, stack.index.max())
@@ -342,12 +389,8 @@ def build_region(tables, registry, regions, hours) -> dict | None:
     return out
 
 
-def build_long(hourly: pd.DataFrame, regions, days: int) -> dict | None:
-    """Hourly price/demand/supply for the month/quarter/year views.
-
-    No fuel mix here: that needs per-unit SCADA, which is only kept for the
-    short window.
-    """
+def build_long(hourly: pd.DataFrame, hourly_fuels: pd.DataFrame, regions, days: int) -> dict | None:
+    """Hourly price/demand/supply/fuel-mix for the month/quarter/year views."""
     if hourly.empty:
         return None
     h = hourly[hourly["REGIONID"].isin(regions)]
@@ -367,6 +410,17 @@ def build_long(hourly: pd.DataFrame, regions, days: int) -> dict | None:
     idx = pd.date_range(last - timedelta(days=days) + timedelta(hours=1), last, freq="h")
     g = g.reindex(idx)
 
+    # The fuel-mix rollup only started once this feature shipped, so it can be
+    # shorter than the price/demand history; reindexing just leaves it blank
+    # for hours it doesn't cover yet instead of dropping them.
+    stack = pd.DataFrame(index=idx)
+    if hourly_fuels is not None and not hourly_fuels.empty:
+        hf = hourly_fuels[hourly_fuels["Region"].isin(regions)]
+        if not hf.empty:
+            stack = hf.groupby(["hour", "fuel"])["MW"].sum().unstack("fuel").reindex(idx)
+
+    fuels = [f for f in FUELS if f in stack.columns and stack[f].abs().sum() > 0]
+
     def col(s, nd=0):
         return [None if pd.isna(v) else round(float(v), nd) for v in s]
 
@@ -376,8 +430,8 @@ def build_long(hourly: pd.DataFrame, regions, days: int) -> dict | None:
         "interval_minutes": 60,
         "timezone": "AEST (market time)",
         "t": [ts.strftime("%Y-%m-%d %H:%M") for ts in idx],
-        "fuels": [],
-        "series": {},
+        "fuels": [{"name": f, "color": FUELS[f], "negative": f in NEGATIVE} for f in fuels],
+        "series": {f: col(stack[f]) for f in fuels},
         "demand": col(g["demand"]),
         "supply": col(g["supply"]),
         "price": col(g["price"], 2),
@@ -390,7 +444,7 @@ def publish(store: "Store", registry, out: Path, hours: int, long_days: int):
         data = build_region(store.tables, registry, regs, hours)
         if data:
             atomic_write(out / f"{key}.json", json.dumps(data, separators=(",", ":")))
-        long = build_long(store.hourly, regs, long_days)
+        long = build_long(store.hourly, store.hourly_fuels, regs, long_days)
         if long:
             atomic_write(out / f"{key}-long.json", json.dumps(long, separators=(",", ":")))
 
@@ -398,7 +452,7 @@ def publish(store: "Store", registry, out: Path, hours: int, long_days: int):
 # --------------------------------------------------------------------------
 # Main loop
 # --------------------------------------------------------------------------
-def poll_once(http, store: Store, backfill: timedelta):
+def poll_once(http, store: Store, backfill: timedelta, registry: pd.DataFrame):
     since = market_now() - backfill
     for kind, (folder, prefix) in SOURCES.items():
         try:
@@ -416,7 +470,7 @@ def poll_once(http, store: Store, backfill: timedelta):
                 store.seen.add(url.rsplit("/", 1)[-1])
             except Exception as exc:
                 log.warning("Skipped %s: %s", url, exc)
-    store.update_hourly()
+    store.update_hourly(registry)
     store.save()
 
 
@@ -438,8 +492,8 @@ def main():
     while True:
         started = time.time()
         try:
-            poll_once(http, store, timedelta(hours=args.backfill_hours))
             registry = load_registry(Path(args.data), http)
+            poll_once(http, store, timedelta(hours=args.backfill_hours), registry)
             publish(store, registry, Path(args.out), args.publish_hours, args.long_days)
             log.info("Published %s", store.tables["price"]["SETTLEMENTDATE"].max() if not store.tables["price"].empty else "nothing yet")
         except Exception:
