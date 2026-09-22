@@ -1,9 +1,15 @@
 """Fuel-tech mapping shared by the live poller (same rules as the Streamlit app)."""
 
 # Stack order, bottom to top. Negative fuels are drawn below zero.
+#
+# "Coal", "Nuclear" and "Other" exist for markets (e.g. US ISOs) that don't
+# report the finer NEM splits: NEM never emits them, so adding them here
+# doesn't change anything for the existing NEM consumers of this table.
 FUELS = {
     "Coal (brown)": "#7A4E2D",
     "Coal (black)": "#2B2F33",
+    "Coal": "#4A3728",
+    "Nuclear": "#7B2D8E",
     "Bioenergy": "#8F9E5A",
     "Distillate": "#B8452F",
     "Gas": "#E8872B",
@@ -14,6 +20,7 @@ FUELS = {
     "Battery (discharging)": "#5B4FC4",
     "Battery (charging)": "#9C94E6",
     "Pumps": "#8DB4D6",
+    "Other": "#6B7280",
 }
 NEGATIVE = {"Battery (charging)", "Pumps"}
 RENEWABLE = {"Bioenergy", "Hydro", "Wind", "Solar (utility)", "Solar (rooftop)"}

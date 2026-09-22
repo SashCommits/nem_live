@@ -1,4 +1,4 @@
-name: NEM live data
+name: US markets live data
 
 on:
   schedule:
@@ -14,10 +14,7 @@ permissions:
   contents: write
 
 concurrency:
-  # Shared with us-markets-live.yml: both workflows clone the same `data`
-  # branch, then force-push their whole store/ tree back. If they ever ran
-  # concurrently, whichever finished last would silently wipe out the
-  # other's changes for that cycle, so both write paths share one group.
+  # Shared with nem-live.yml: see that file for why.
   group: data-branch
   cancel-in-progress: false
 
@@ -34,15 +31,15 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-us.txt
 
       - name: Restore saved data
         run: |
           git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" store || mkdir -p store
           rm -rf store/.git
 
-      - name: Fetch latest AEMO data
-        run: python poller.py --once --data store --out store/public
+      - name: Fetch latest ERCOT data
+        run: python us_poller.py --once --data store/ercot --out store/public/ercot
 
       - name: Save data
         run: |
@@ -50,5 +47,5 @@ jobs:
           echo "nemosis_cache/" > .gitignore
           git init -q -b data
           git add -A
-          git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update $(date -u +%FT%TZ)"
+          git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update US markets $(date -u +%FT%TZ)"
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data

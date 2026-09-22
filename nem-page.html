@@ -1,0 +1,26 @@
+<!-- PowerSocket Live NEM widget -->
+<div class="nemlive"
+     data-src="https://raw.githubusercontent.com/SashCommits/nem_live/data/public/"
+     data-regions='[{"key":"nem","label":"NEM"},{"key":"nsw1","label":"NSW"},{"key":"qld1","label":"QLD"},{"key":"vic1","label":"VIC"},{"key":"sa1","label":"SA"},{"key":"tas1","label":"TAS"}]'>
+</div>
+
+<style>
+/* Colours are inherited from the surrounding page so this works on a light or dark theme. */
+.nemlive{font-family:inherit;color:inherit;max-width:920px;margin:0 auto}
+.nemlive .nl-controls{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between;margin-bottom:.75rem}
+.nemlive .nl-group{display:flex;flex-wrap:wrap;border:1px solid rgba(128,128,128,.4);border-radius:8px;overflow:hidden}
+.nemlive button.nl-btn{border:0;border-right:1px solid rgba(128,128,128,.3);background:transparent;color:inherit;font:inherit;font-size:.9rem;padding:.45rem .9rem;cursor:pointer;opacity:.65}
+.nemlive button.nl-btn:last-child{border-right:0}
+.nemlive button.nl-btn.active{background:rgba(128,128,128,.22);font-weight:600;opacity:1}
+.nemlive button.nl-btn[disabled]{opacity:.28;cursor:not-allowed}
+.nemlive .nl-stats{display:flex;gap:2rem;flex-wrap:wrap;margin:1rem 0}
+.nemlive .nl-stat{min-width:110px}
+.nemlive .nl-stat .nl-label{font-size:.9rem;opacity:.6}
+.nemlive .nl-stat .nl-value{font-size:1.5rem;font-weight:600;margin-top:.15rem}
+.nemlive .nl-chart{width:100%;height:460px}
+.nemlive .nl-meta{font-size:.75rem;opacity:.55;margin-top:.5rem}
+.nemlive .nl-error{padding:2rem 1rem;text-align:center;border:1px solid rgba(200,80,80,.5);border-radius:8px;opacity:.9}
+</style>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/SashCommits/nem_live@main/widget.js"></script>
