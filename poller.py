@@ -29,6 +29,7 @@ from fueltech import FUELS, NEGATIVE, classify
 log = logging.getLogger("nem-live")
 
 BASE = "https://nemweb.com.au"
+MMSDM = f"{BASE}/Data_Archive/Wholesale_Electricity/MMSDM"
 SOURCES = {
     "scada": ("/Reports/Current/Dispatch_SCADA/", "PUBLIC_DISPATCHSCADA_"),
     "dispatchis": ("/Reports/Current/DispatchIS_Reports/", "PUBLIC_DISPATCHIS_"),
@@ -204,30 +205,63 @@ def atomic_write(path: Path, text: str):
 # --------------------------------------------------------------------------
 # Registry (DUID -> fuel), refreshed daily via NEMOSIS
 # --------------------------------------------------------------------------
-def load_registry(root: Path) -> pd.DataFrame:
-    """DUID -> Region/fuel registry, refreshed daily via NEMOSIS.
+def mmsdm_table(http, table: str, when: datetime) -> pd.DataFrame:
+    """One PARTICIPANT_REGISTRATION table from a monthly MMSDM archive."""
+    stamp = f"{when.year}{when.month:02d}01"
+    url = (f"{MMSDM}/{when.year}/MMSDM_{when.year}_{when.month:02d}"
+           f"/MMSDM_Historical_Data_SQLLoader/DATA"
+           f"/PUBLIC_ARCHIVE%23{table}%23FILE01%23{stamp}0000.zip")
+    tables = parse_aemo(http.get(url, timeout=120).content)
+    return tables[("PARTICIPANT_REGISTRATION", table)]
 
-    AEMO's participant-info site blocks requests from many cloud/CI IP
-    ranges (Cloudflare bot protection), so this can fail on hosted
-    runners. Fall back to an empty registry rather than aborting the
-    whole poll: price/demand still publish, just without a fuel-mix
-    breakdown until a refresh succeeds.
+
+def build_registry(http) -> pd.DataFrame:
+    """DUID -> Region/fuel, from NEMWeb's MMSDM archive.
+
+    AEMO's registration spreadsheet lives on a Cloudflare-protected host that
+    403s hosted CI runners, so read the same facts from NEMWeb instead, which
+    is not blocked: DUDETAILSUMMARY gives region and dispatch type, and
+    GENUNITS carries the energy source. GENUNITS.STATIONID is not populated,
+    but its GENSETID is the DUID, so the two join directly.
+
+    The monthly archive appears a few days into the month; step back until one
+    exists.
     """
+    when = market_now().replace(day=1)
+    last = None
+    for _ in range(3):
+        try:
+            units = mmsdm_table(http, "DUDETAILSUMMARY", when)
+            gensets = mmsdm_table(http, "GENUNITS", when)
+            break
+        except Exception as exc:
+            last = exc
+            when = (when - timedelta(days=1)).replace(day=1)
+    else:
+        raise last
+
+    units["START_DATE"] = pd.to_datetime(units["START_DATE"], format=AEMO_TIME, errors="coerce")
+    units = units.sort_values("START_DATE").drop_duplicates("DUID", keep="last")
+    gensets = gensets.drop_duplicates("GENSETID", keep="last")
+
+    df = units.merge(gensets[["GENSETID", "CO2E_ENERGY_SOURCE"]],
+                     left_on="DUID", right_on="GENSETID", how="inner")
+    dtype = df["DISPATCHTYPE"].astype(str).str.upper()
+    df["is_load"] = dtype.eq("LOAD")
+    df["fuel"] = [classify(s, l) for s, l in zip(df["CO2E_ENERGY_SOURCE"], df["is_load"])]
+    df = df.rename(columns={"REGIONID": "Region"})
+    return df[df["fuel"].notna()][["DUID", "Region", "fuel", "is_load"]].reset_index(drop=True)
+
+
+def load_registry(root: Path, http) -> pd.DataFrame:
+    """Cached daily; falls back to the previous copy, then to no fuel mix."""
     path = root / "registry.parquet"
     stamp = root / "registry_updated.txt"  # file mtimes don't survive a git checkout
     fresh = path.exists() and stamp.exists() and time.time() - float(stamp.read_text() or 0) < 86400
     if not fresh:
         try:
-            from nemosis import static_table
-            cache = root / "nemosis_cache"
-            cache.mkdir(exist_ok=True)
-            df = static_table("Generators and Scheduled Loads", str(cache), update_static_file=True)
-            df.columns = [c.strip() for c in df.columns]
-            df = df.drop_duplicates("DUID").copy()
-            dtype = df["Dispatch Type"].astype(str).str.lower()
-            df["is_load"] = dtype.str.contains("load") & ~dtype.str.contains("bidirectional")
-            df["fuel"] = df.apply(classify, axis=1)
-            df[["DUID", "Region", "fuel", "is_load"]].to_parquet(path, index=False)
+            df = build_registry(http)
+            df.to_parquet(path, index=False)
             stamp.write_text(str(time.time()))
             log.info("Registry refreshed: %d units", len(df))
         except Exception as exc:
@@ -405,7 +439,7 @@ def main():
         started = time.time()
         try:
             poll_once(http, store, timedelta(hours=args.backfill_hours))
-            registry = load_registry(Path(args.data))
+            registry = load_registry(Path(args.data), http)
             publish(store, registry, Path(args.out), args.publish_hours, args.long_days)
             log.info("Published %s", store.tables["price"]["SETTLEMENTDATE"].max() if not store.tables["price"].empty else "nothing yet")
         except Exception:
