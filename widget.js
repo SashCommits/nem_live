@@ -309,6 +309,23 @@
       );
     }
 
+    // Data refreshes every ~5 minutes server-side; poll for it instead of
+    // requiring a manual page reload. Skip ticks while the tab is hidden,
+    // and catch up immediately when it becomes visible again rather than
+    // waiting out the rest of that interval on a stale chart.
+    var REFRESH_MS = 60000;
+    setInterval(function () {
+      if (document.visibilityState === "hidden") return;
+      state.cache = {};
+      render();
+    }, REFRESH_MS);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") {
+        state.cache = {};
+        render();
+      }
+    });
+
     render();
   }
 
