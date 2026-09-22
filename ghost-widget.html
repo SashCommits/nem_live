@@ -56,6 +56,7 @@
     '<div class="nl-group" data-role="regions"></div>' +
     '<div class="nl-group" data-role="ranges"></div>' +
     '<div class="nl-group" data-role="mix"></div>' +
+    '<div class="nl-group" data-role="reset"></div>' +
     "</div>" +
     '<div class="nl-stats" data-role="stats"></div>' +
     '<div class="nl-chart" data-role="chart"></div>' +
@@ -64,6 +65,7 @@
   var regionsEl = root.querySelector('[data-role="regions"]');
   var rangesEl = root.querySelector('[data-role="ranges"]');
   var mixEl = root.querySelector('[data-role="mix"]');
+  var resetEl = root.querySelector('[data-role="reset"]');
   var statsEl = root.querySelector('[data-role="stats"]');
   var chartEl = root.querySelector('[data-role="chart"]');
   var metaEl = root.querySelector('[data-role="meta"]');
@@ -99,6 +101,16 @@
     render();
   });
   mixEl.appendChild(mixBtn);
+
+  var resetBtn = document.createElement("button");
+  resetBtn.className = "nl-btn";
+  resetBtn.textContent = "Reset view";
+  resetBtn.addEventListener("click", function () {
+    // A fresh Plotly.newPlot() call replaces the figure outright, which
+    // discards any manual zoom/pan and snaps back to the selected range.
+    render();
+  });
+  resetEl.appendChild(resetBtn);
 
   function showError(message) {
     chartEl.innerHTML = '<div class="nl-error">' + message + "</div>";
@@ -158,6 +170,35 @@
   function round(arr, dp) {
     var f = Math.pow(10, dp);
     return arr.map(function (v) { return v === null ? null : Math.round(v * f) / f; });
+  }
+
+  // Tick density and date format both need to shrink as the window grows,
+  // otherwise a year view prints full timestamps and a 15-minute view prints
+  // a redundant date under every tick.
+  function xAxisConfig(range, grid) {
+    var cfg = {
+      type: "date",
+      gridcolor: grid,
+      zerolinecolor: grid,
+      automargin: true,
+      tickfont: { size: 11 },
+      nticks: 7,
+      tickangle: "auto"
+    };
+    if (range.hours <= 24) {
+      cfg.tickformat = "%H:%M";
+      cfg.hoverformat = "%H:%M, %d %b";
+    } else if (range.hours <= 24 * 7) {
+      cfg.tickformat = "%a %d %b";
+      cfg.hoverformat = "%a %d %b, %H:%M";
+    } else if (range.hours <= 24 * 91) {
+      cfg.tickformat = "%d %b";
+      cfg.hoverformat = "%d %b %Y";
+    } else {
+      cfg.tickformat = "%b %Y";
+      cfg.hoverformat = "%d %b %Y";
+    }
+    return cfg;
   }
 
   function render() {
@@ -236,7 +277,7 @@
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(0,0,0,0)",
         font: { color: fg },
-        xaxis: { type: "date", gridcolor: grid, zerolinecolor: grid },
+        xaxis: xAxisConfig(range, grid),
         // The stack has to sit on a zero baseline; the plain lines read better auto-scaled.
         yaxis: { title: "MW", gridcolor: grid, zerolinecolor: grid, rangemode: state.mix ? "tozero" : "normal" },
         yaxis2: { title: "$/MWh", overlaying: "y", side: "right", showgrid: false },
