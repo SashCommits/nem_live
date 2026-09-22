@@ -1,0 +1,52 @@
+{{> lead}}
+{{!-- Live market pages are the site's distinguishing feature, so they get a
+      fixed route here rather than depending on the nav menu being configured.
+      Links are theme settings (Design → Homepage) so slugs can differ; the
+      panel hides itself if the first link is cleared. --}}
+{{#if @custom.live_market_1_url}}
+<section class="live-strip wrap" aria-labelledby="live-h">
+  <div class="live-strip-inner">
+    <div class="live-strip-copy">
+      <h2 id="live-h">Live electricity prices</h2>
+      <p class="meta">Five-minute market data, updating continuously.</p>
+    </div>
+    <div class="live-links">
+      <a class="live-link" href="{{@custom.live_market_1_url}}">
+        <span class="live-dot" aria-hidden="true"></span>{{@custom.live_market_1_label}}
+      </a>
+      {{#if @custom.live_market_2_url}}
+      <a class="live-link" href="{{@custom.live_market_2_url}}">
+        <span class="live-dot" aria-hidden="true"></span>{{@custom.live_market_2_label}}
+      </a>
+      {{/if}}
+    </div>
+  </div>
+</section>
+{{/if}}
+<div class="wrap cols">
+  <section aria-labelledby="latest-h">
+    <div class="sechead"><h2 id="latest-h">Latest</h2></div>
+    {{#get "posts" filter="id:-{{id}}" limit="9" include="tags"}}
+      {{#if posts}}
+      <div class="grid">{{#foreach posts}}{{> card}}{{/foreach}}</div>
+      {{else}}
+      <p class="meta">More stories appear here as you publish them.</p>
+      {{/if}}
+    {{/get}}
+  </section>
+  <aside aria-labelledby="tags-h">
+    <div class="sechead"><h2 id="tags-h">Browse by tag</h2></div>
+    {{#get "tags" limit="30" filter="visibility:public" order="count.posts desc" include="count.posts"}}
+      <div class="tags">{{#foreach tags}}<a class="tag" href="{{url}}">{{name}}</a>{{/foreach}}</div>
+    {{/get}}
+  </aside>
+</div>
+<section class="dash-strip">
+  <div class="wrap dash-strip-inner">
+    <div>
+      <h2>Global Electrification Dashboard</h2>
+      <p>A monthly dataset tracking how quickly the energy system is actually electrifying.</p>
+    </div>
+    <a class="btn on-band" href="{{@site.url}}/dashboard/">Open the dashboard</a>
+  </div>
+</section>

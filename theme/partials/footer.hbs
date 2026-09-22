@@ -1,0 +1,10 @@
+<footer class="site-footer">
+  <div class="wrap footer-row">
+    <div class="footer-brand">
+      <a class="brand brand-small" href="{{@site.url}}">{{> logo}}<span class="brand-name">{{@site.title}}</span></a>
+      {{#if @site.description}}<p>{{@site.description}}</p>{{/if}}
+    </div>
+    <nav aria-label="Footer">{{navigation type="secondary"}}</nav>
+    <p class="copyright">&copy; {{date format="YYYY"}} {{@site.title}}</p>
+  </div>
+</footer>

@@ -1,0 +1,39 @@
+{{!< default}}
+{{#post}}
+<article class="art {{post_class}}">
+  <header class="art-head narrow">
+    {{#primary_tag}}<a class="kicker" href="{{url}}">{{name}}</a>{{/primary_tag}}
+    <h1 class="art-title">{{title}}</h1>
+    {{#if custom_excerpt}}<p class="art-deck">{{custom_excerpt}}</p>{{/if}}
+    <div class="byline">By {{authors}}. <time datetime="{{date format="YYYY-MM-DD"}}">{{date format="D MMMM YYYY"}}</time>, {{reading_time minute="1 min read" minutes="% min read"}}</div>
+  </header>
+  {{#if feature_image}}
+  <figure class="art-image">
+    {{!-- The article hero is the LCP element on post pages. --}}
+    <img srcset="{{img_url feature_image size="s"}} 400w, {{img_url feature_image size="m"}} 800w, {{img_url feature_image size="l"}} 1200w, {{img_url feature_image size="xl"}} 2000w"
+      sizes="(max-width: 1200px) 100vw, 1200px"
+      src="{{img_url feature_image size="l"}}"
+      width="1200" height="750" fetchpriority="high" decoding="async"
+      alt="{{#if feature_image_alt}}{{feature_image_alt}}{{else}}{{title}}{{/if}}">
+    {{#if feature_image_caption}}<figcaption>{{feature_image_caption}}</figcaption>{{/if}}
+  </figure>
+  {{/if}}
+  <div class="gh-content art-body">
+    {{content}}
+  </div>
+  {{#if tags}}
+  <footer class="art-tags narrow">
+    <h2 class="label">Tags</h2>
+    <div class="tags">{{#foreach tags}}<a class="tag" href="{{url}}">{{name}}</a>{{/foreach}}</div>
+  </footer>
+  {{/if}}
+</article>
+{{/post}}
+{{#get "posts" filter="tags:[{{post.tags}}]+id:-{{post.id}}" limit="3" include="tags"}}
+  {{#if posts}}
+  <section class="wrap related" aria-labelledby="related-h">
+    <div class="sechead"><h2 id="related-h">Related</h2></div>
+    <div class="grid">{{#foreach posts}}{{> card}}{{/foreach}}</div>
+  </section>
+  {{/if}}
+{{/get}}

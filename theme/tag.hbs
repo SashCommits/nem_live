@@ -1,0 +1,12 @@
+{{!< default}}
+<div class="wrap listing">
+  {{#tag}}
+  <header class="listing-head">
+    <h1>{{name}}</h1>
+    {{#if description}}<p>{{description}}</p>{{/if}}
+  </header>
+  {{/tag}}
+  <h2 class="visually-hidden">Articles tagged</h2>
+  <div class="grid">{{#foreach posts}}{{> card}}{{/foreach}}</div>
+  {{pagination}}
+</div>

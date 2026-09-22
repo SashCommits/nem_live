@@ -1,0 +1,15 @@
+{{!< default}}
+{{#get "posts" filter="featured:true" limit="1" include="tags,authors" as |featured|}}
+  {{#foreach featured}}{{> home-body}}{{/foreach}}
+{{else}}
+  {{#get "posts" limit="1" include="tags,authors" as |newest|}}
+    {{#foreach newest}}{{> home-body}}{{/foreach}}
+  {{else}}
+    <div class="wrap">
+      <div class="empty">
+        <h1>No stories published yet</h1>
+        <p>Publish your first article in Ghost Admin and it appears here. Mark one as featured to make it the main story.</p>
+      </div>
+    </div>
+  {{/get}}
+{{/get}}

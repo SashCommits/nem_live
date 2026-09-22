@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="{{@site.locale}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{meta_title}}</title>
+
+  {{!-- Tints the browser chrome on mobile to match the active mode.
+        Kept in step with --bg in screen.css; site.js updates it on toggle. --}}
+  <meta name="theme-color" content="#FBFAF8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101317" media="(prefers-color-scheme: dark)">
+
+  {{!-- Our own stylesheet first so it is never queued behind the font CSS. --}}
+  <link rel="stylesheet" href="{{asset "css/screen.css"}}">
+  <style>:root{--accent: {{@site.accent_color}};}</style>
+
+  {{!-- Fonts load without blocking the first paint. They already swap in
+        late (display=swap), so this costs nothing visually and removes a
+        render-blocking round trip on slow mobile connections. --}}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" media="print" onload="this.media='all';this.onload=null"
+    href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  <noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+  </noscript>
+  <script>
+    /* Runs before first paint. Two jobs:
+       1. Apply the saved colour mode so the page never flashes the wrong one.
+       2. Derive readable companions for the accent. Ghost lets the site owner
+          set the accent to any hue, so neither "dark text on it" nor "use it
+          as text" is safe by default. We compute --on-accent (what sits ON the
+          accent) and --accent-on-light/-dark (the accent nudged until it is
+          legible AS text on each mode's background). */
+    (function () {
+      var root = document.documentElement;
+
+      try {
+        var saved = localStorage.getItem('ps-theme');
+        if (saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved);
+      } catch (e) {}
+
+      /* Marks that JS is available so the CSS can collapse the mobile nav
+         panel. This has to happen before the first paint: doing it from the
+         deferred script instead meant the panel painted open and then
+         vanished, shoving the page up and costing a large layout shift.
+         Without JS the class never lands and every link stays visible. */
+      root.className += (root.className ? ' ' : '') + 'js-nav';
+
+      function chan(c) {
+        c /= 255;
+        return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+      }
+      function lum(rgb) {
+        return 0.2126 * chan(rgb[0]) + 0.7152 * chan(rgb[1]) + 0.0722 * chan(rgb[2]);
+      }
+      function ratio(a, b) {
+        var hi = Math.max(a, b), lo = Math.min(a, b);
+        return (hi + 0.05) / (lo + 0.05);
+      }
+      function hex(rgb) {
+        return '#' + rgb.map(function (v) {
+          return ('0' + Math.round(v).toString(16)).slice(-2);
+        }).join('');
+      }
+      /* Mix toward black or white until it clears the contrast target. Keeps
+         the hue recognisable, unlike swapping in an unrelated colour. */
+      function legible(rgb, bg, target) {
+        var bgL = lum(bg), toward = bgL > 0.5 ? [0, 0, 0] : [255, 255, 255];
+        for (var t = 0; t <= 1.0001; t += 0.05) {
+          var mixed = rgb.map(function (v, i) { return v + (toward[i] - v) * t; });
+          if (ratio(lum(mixed), bgL) >= target) return mixed;
+        }
+        return toward;
+      }
+
+      try {
+        var raw = getComputedStyle(root).getPropertyValue('--accent').trim();
+        var m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw);
+        if (!m) return;
+        var h = m[1];
+        if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+        var rgb = [0, 2, 4].map(function (i) { return parseInt(h.substr(i, 2), 16); });
+        var L = lum(rgb);
+
+        root.style.setProperty('--on-accent',
+          ratio(L, 0) > ratio(L, 1) ? '#14171B' : '#FFFFFF');
+
+        /* Backgrounds these have to survive against — keep in step with the
+           --bg tokens in screen.css. */
+        root.style.setProperty('--accent-on-light', hex(legible(rgb, [251, 250, 248], 4.5)));
+        root.style.setProperty('--accent-on-dark', hex(legible(rgb, [16, 19, 23], 4.5)));
+      } catch (e) {}
+    })();
+  </script>
+  {{ghost_head}}
+</head>
+<body class="{{body_class}}" data-csv="{{@custom.dashboard_csv_url}}">
+  <a class="skip" href="#main">Skip to content</a>
+  {{#if @custom.show_market_ticker}}{{#if @custom.dashboard_csv_url}}{{> ticker}}{{/if}}{{/if}}
+  {{> header}}
+  <main id="main">
+    {{{body}}}
+  </main>
+  {{> subscribe}}
+  {{> footer}}
+  <script src="{{asset "js/site.js"}}" defer></script>
+  {{ghost_foot}}
+</body>
+</html>

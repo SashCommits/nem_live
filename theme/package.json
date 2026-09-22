@@ -1,0 +1,57 @@
+{
+  "name": "powersocket",
+  "description": "Theme for The PowerSocket: electricity markets, grids, storage and electrification.",
+  "version": "1.3.0",
+  "license": "MIT",
+  "author": { "name": "The PowerSocket", "email": "hello@example.com" },
+  "keywords": ["ghost-theme"],
+  "engines": { "ghost": ">=5.0.0" },
+  "config": {
+    "posts_per_page": 12,
+    "card_assets": true,
+    "image_sizes": {
+      "s": { "width": 400 },
+      "m": { "width": 800 },
+      "l": { "width": 1200 },
+      "xl": { "width": 2000 }
+    },
+    "custom": {
+      "tagline": {
+        "type": "text",
+        "default": "Tracking the global shift from molecules to electrons"
+      },
+      "dashboard_csv_url": {
+        "type": "text",
+        "default": "",
+        "description": "Published Google Sheet CSV link for the dashboard and market ticker"
+      },
+      "show_market_ticker": {
+        "type": "boolean",
+        "default": true,
+        "group": "homepage"
+      },
+      "live_market_1_label": {
+        "type": "text",
+        "default": "Live NEM prices",
+        "group": "homepage",
+        "description": "First live market panel. Clear the link below to hide the panel."
+      },
+      "live_market_1_url": {
+        "type": "text",
+        "default": "/live-nem/",
+        "group": "homepage"
+      },
+      "live_market_2_label": {
+        "type": "text",
+        "default": "Live ERCOT prices",
+        "group": "homepage",
+        "description": "Second live market. Leave the link blank if you only have one."
+      },
+      "live_market_2_url": {
+        "type": "text",
+        "default": "",
+        "group": "homepage"
+      }
+    }
+  }
+}
