@@ -288,7 +288,7 @@
       });
 
       var html =
-        stat("Price now", lastPrice !== null ? "$" + lastPrice.toFixed(0) + "/MWh" : "–") +
+        stat("Price now", lastPrice !== null ? "$" + lastPrice.toFixed(2) + "/MWh" : "–") +
         stat("Demand now", lastDemand !== null ? Math.round(lastDemand).toLocaleString() + " MW" : "–") +
         stat("Supply now", lastSupply !== null ? Math.round(lastSupply).toLocaleString() + " MW" : "–");
       if (generationTotal > 0) {

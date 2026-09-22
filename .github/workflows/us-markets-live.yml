@@ -14,14 +14,20 @@ permissions:
   contents: write
 
 concurrency:
-  # Shared with nem-live.yml: see that file for why.
-  group: data-branch
+  # Only guards against two US-markets runs overlapping. nem-live.yml has
+  # its own group: neither needs to lock the other out, because each poll
+  # cycle below re-syncs with the data branch immediately before writing
+  # (see the loop) rather than force-pushing a stale full tree.
+  group: us-markets-live
   cancel-in-progress: false
 
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # See nem-live.yml for why this loops instead of polling once: GitHub's
+    # schedule trigger goes hours between actual firings in practice, so
+    # each successful firing now covers most of a runner's 6h budget itself.
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -33,19 +39,29 @@ jobs:
       - name: Install
         run: pip install -r requirements-us.txt
 
-      - name: Restore saved data
+      - name: Poll ERCOT and publish every ~5 minutes for the rest of the job
         run: |
-          git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" store || mkdir -p store
-          rm -rf store/.git
-
-      - name: Fetch latest ERCOT data
-        run: python us_poller.py --once --data store/ercot --out store/public/ercot
-
-      - name: Save data
-        run: |
+          git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" store || (mkdir -p store && cd store && git init -q -b data)
           cd store
-          echo "nemosis_cache/" > .gitignore
-          git init -q -b data
-          git add -A
-          git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update US markets $(date -u +%FT%TZ)"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data
+          [ -f .gitignore ] || echo "nemosis_cache/" > .gitignore
+          git remote get-url origin >/dev/null 2>&1 || git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
+          cd ..
+
+          end=$((SECONDS + 335*60))
+          while [ $SECONDS -lt $end ]; do
+            cycle_start=$SECONDS
+            # nem-live.yml may have pushed its own files since our last
+            # cycle; sync first so our push only adds ours, instead of a
+            # stale full-tree force-push wiping theirs out.
+            (cd store && git fetch -q --depth 1 origin data && git reset -q --hard origin/data) || true
+            timeout 180 python us_poller.py --once --data store/ercot --out store/public/ercot || echo "poll cycle failed, will retry next cycle"
+            cd store
+            git add -A
+            if ! git diff --cached --quiet; then
+              git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update US markets $(date -u +%FT%TZ)"
+              git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data
+            fi
+            cd ..
+            elapsed=$((SECONDS - cycle_start))
+            sleep $((elapsed < 270 ? 270 - elapsed : 5))
+          done

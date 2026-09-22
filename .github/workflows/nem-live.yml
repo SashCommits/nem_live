@@ -14,17 +14,24 @@ permissions:
   contents: write
 
 concurrency:
-  # Shared with us-markets-live.yml: both workflows clone the same `data`
-  # branch, then force-push their whole store/ tree back. If they ever ran
-  # concurrently, whichever finished last would silently wipe out the
-  # other's changes for that cycle, so both write paths share one group.
-  group: data-branch
+  # Only guards against two NEM runs overlapping. us-markets-live.yml has
+  # its own group: neither needs to lock the other out, because each poll
+  # cycle below re-syncs with the data branch immediately before writing
+  # (see the loop) rather than force-pushing a stale full tree.
+  group: nem-live
   cancel-in-progress: false
 
 jobs:
   poll:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # GitHub's schedule trigger is best-effort and can go hours between
+    # actual firings (observed directly: 3 firings in ~16h, gaps over 3h
+    # each) — far worse than its documented "occasional delay". A single
+    # --once poll per firing means the site sits stale for that whole gap.
+    # Runners can execute up to 6h, so instead each successful firing polls
+    # in a loop for most of that budget: turns "must fire every 5 min" (which
+    # fails) into "must fire at least once every ~5.5h" (which shouldn't).
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -36,19 +43,29 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
 
-      - name: Restore saved data
+      - name: Poll AEMO and publish every ~5 minutes for the rest of the job
         run: |
-          git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" store || mkdir -p store
-          rm -rf store/.git
-
-      - name: Fetch latest AEMO data
-        run: python poller.py --once --data store --out store/public
-
-      - name: Save data
-        run: |
+          git clone --depth 1 --branch data "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" store || (mkdir -p store && cd store && git init -q -b data)
           cd store
-          echo "nemosis_cache/" > .gitignore
-          git init -q -b data
-          git add -A
-          git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update $(date -u +%FT%TZ)"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data
+          [ -f .gitignore ] || echo "nemosis_cache/" > .gitignore
+          git remote get-url origin >/dev/null 2>&1 || git remote add origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
+          cd ..
+
+          end=$((SECONDS + 335*60))
+          while [ $SECONDS -lt $end ]; do
+            cycle_start=$SECONDS
+            # us-markets-live.yml may have pushed its own files since our
+            # last cycle; sync first so our push only adds ours, instead of
+            # a stale full-tree force-push wiping theirs out.
+            (cd store && git fetch -q --depth 1 origin data && git reset -q --hard origin/data) || true
+            timeout 180 python poller.py --once --data store --out store/public || echo "poll cycle failed, will retry next cycle"
+            cd store
+            git add -A
+            if ! git diff --cached --quiet; then
+              git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update $(date -u +%FT%TZ)"
+              git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data
+            fi
+            cd ..
+            elapsed=$((SECONDS - cycle_start))
+            sleep $((elapsed < 270 ? 270 - elapsed : 5))
+          done
