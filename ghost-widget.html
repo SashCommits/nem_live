@@ -208,7 +208,9 @@
       if (s.fuel) {
         return {
           x: x, y: y, name: s.name,
-          stackgroup: "mix",
+          // Charging and pumping are load, not generation: stack them below the
+          // zero line instead of letting them eat into the generation stack.
+          stackgroup: s.fuel.negative ? "mix-load" : "mix-gen",
           mode: "lines",
           line: { width: 0, color: s.fuel.color },
           fillcolor: s.fuel.color,
@@ -246,16 +248,24 @@
     var lastDemand = lastValid(data.demand);
     var lastSupply = lastValid(data.supply);
     var lastPrice = lastValid(data.price);
-    var renewableTotal = RENEWABLE.reduce(function (sum, name) {
-      return sum + (data.series[name] ? lastValid(data.series[name]) || 0 : 0);
-    }, 0);
+
+    // Share of generation, not of demand: rooftop solar sits behind the meter
+    // and so is missing from operational demand, which pushes the ratio past
+    // 100% around midday. Charging and pumping are load, so exclude them.
+    var renewableTotal = 0, generationTotal = 0;
+    fuels.forEach(function (f) {
+      var v = lastValid(data.series[f.name]) || 0;
+      if (v <= 0) return;
+      generationTotal += v;
+      if (RENEWABLE.indexOf(f.name) !== -1) renewableTotal += v;
+    });
 
     var html =
       stat("Price now", lastPrice !== null ? "$" + lastPrice.toFixed(0) + "/MWh" : "\u2013") +
       stat("Demand now", lastDemand !== null ? Math.round(lastDemand).toLocaleString() + " MW" : "\u2013") +
       stat("Supply now", lastSupply !== null ? Math.round(lastSupply).toLocaleString() + " MW" : "\u2013");
-    if (fuels.length && lastDemand) {
-      html += stat("Renewables now", ((100 * renewableTotal) / lastDemand).toFixed(0) + "%");
+    if (generationTotal > 0) {
+      html += stat("Renewables now", ((100 * renewableTotal) / generationTotal).toFixed(0) + "%");
     }
     statsEl.innerHTML = html;
 

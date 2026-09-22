@@ -19,42 +19,39 @@ NEGATIVE = {"Battery (charging)", "Pumps"}
 RENEWABLE = {"Bioenergy", "Hydro", "Wind", "Solar (utility)", "Solar (rooftop)"}
 STORAGE = {"Battery (discharging)", "Battery (charging)", "Pumps"}
 
-FIELDS = [
-    "Fuel Source - Primary",
-    "Fuel Source - Descriptor",
-    "Technology Type - Primary",
-    "Technology Type - Descriptor",
-]
+# CO2E_ENERGY_SOURCE values from the MMSDM GENUNITS table. It is a closed
+# vocabulary, so map it explicitly: keyword matching gets several of these
+# wrong, putting "Landfill biogas methane" in Gas and "Coal mine waste gas"
+# in coal.
+ENERGY_SOURCE = {
+    "black coal": "Coal (black)",
+    "brown coal": "Coal (brown)",
+    "other solid fossil fuels": "Coal (black)",
+    "natural gas (pipeline)": "Gas",
+    "coal seam methane": "Gas",
+    "coal mine waste gas": "Gas",
+    "ethane": "Gas",
+    "hydro": "Hydro",
+    "wind": "Wind",
+    "solar": "Solar (utility)",
+    "battery storage": "Battery",
+    "diesel oil": "Distillate",
+    "kerosene - non aviation": "Distillate",
+    "landfill biogas methane": "Bioenergy",
+    "bagasse": "Bioenergy",
+    "biomass and industrial materials": "Bioenergy",
+    "other biofuels": "Bioenergy",
+    "primary solid biomass fuels": "Bioenergy",
+}
 
 
-def classify(row) -> str | None:
-    """Map AEMO registration fields to a fuel-tech bucket."""
-    text = " ".join(str(row.get(c, "")) for c in FIELDS).lower()
-    dtype = str(row.get("Dispatch Type", "")).lower()
-    is_load = "load" in dtype and "bidirectional" not in dtype
-
-    if "battery" in text:
-        return "Battery"
-    if is_load:
-        if "hydro" in text or "pump" in text or "water" in text:
-            return "Pumps"
+def classify(source: str, is_load: bool) -> str | None:
+    """Map a GENUNITS energy source to a fuel-tech bucket."""
+    fuel = ENERGY_SOURCE.get(str(source).strip().lower())
+    if fuel is None:
         return None
-    if "solar" in text:
-        return "Solar (utility)"
-    if "wind" in text:
-        return "Wind"
-    if "hydro" in text or "water" in text:
-        return "Hydro"
-    if "methane" in text or "coal seam" in text or "mine gas" in text:
-        return "Gas"
-    if "brown coal" in text:
-        return "Coal (brown)"
-    if "coal" in text:
-        return "Coal (black)"
-    if "gas" in text:
-        return "Gas"
-    if any(k in text for k in ("diesel", "distillate", "liquid", "kerosene", "oil")):
-        return "Distillate"
-    if any(k in text for k in ("bio", "landfill", "bagasse", "waste", "sewage", "wood")):
-        return "Bioenergy"
-    return None
+    if fuel == "Battery":
+        return "Battery"  # split into charging/discharging from the live MW
+    if is_load:
+        return "Pumps" if fuel == "Hydro" else None
+    return fuel
