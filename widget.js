@@ -326,6 +326,11 @@
       }
     });
 
+    // Chart colours are read from the page at draw time, so a light/dark
+    // switch leaves the old ones until something redraws. The theme fires
+    // this when the reader toggles; redraw from cache, no refetch needed.
+    window.addEventListener("ps:themechange", function () { render(); });
+
     render();
   }
 
