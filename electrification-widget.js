@@ -504,7 +504,8 @@
         var p = el("p");
         var b = el("b", "", c.label + ": ");
         p.appendChild(b);
-        var text = d.source_name + " (" + d.licence + ").";
+        // A source's own required attribution statement where it has one (MoSPI), else name and licence.
+        var text = d.attribution || (d.source_name + " (" + d.licence + ").");
         if (d.cross_checked_against && d.cross_checked_against.length) {
           text += " " + sectorLabel(state.sector) + " cross-checked against " + d.cross_checked_against.join("; ") + ".";
         }
