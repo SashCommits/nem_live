@@ -23,10 +23,15 @@
     { key: "Commercial/services", label: "Commercial/services" },
     { key: "Transport", label: "Transport" }
   ];
-  // Categorical slots 1 and 2 (blue, orange), validated for CVD separation and
-  // 3:1 contrast on white and on the site's dark background. Order is fixed:
-  // a country keeps its colour whatever else is shown.
-  var SERIES = { light: ["#2a78d6", "#eb6834"], dark: ["#3987e5", "#d95926"] };
+  // Categorical slots 1-4 (blue, orange, aqua, yellow), validated for CVD
+  // separation on white and on the site's dark background (aqua and yellow are
+  // under 3:1 on white, so values are always labelled and a table is offered).
+  // A country keeps its slot whatever else is shown.
+  var SERIES = {
+    light: ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"],
+    dark: ["#3987e5", "#d95926", "#199e70", "#c98500"]
+  };
+  var SLOT = { AU: 0, US: 1, CN: 2, IN: 3 };
   var TREND_YEARS = 10;
 
   var CSS = [
@@ -59,7 +64,7 @@
     ".ps2-row[aria-pressed=true]{background:var(--ps2-wash);box-shadow:inset 3px 0 0 var(--ps2-ink2)}",
     ".ps2-row-label{display:flex;justify-content:space-between;font-size:.9rem;margin-bottom:.3rem}",
     ".ps2-row-label .ps2-go{color:var(--ps2-muted);font-size:.8rem}",
-    ".ps2-bar-line{display:flex;align-items:center;gap:.5rem;height:14px;margin-top:3px}",
+    ".ps2-bar-line{display:flex;align-items:center;gap:.5rem;min-height:14px;margin-top:3px}",
     ".ps2-bar-track{flex:1;position:relative;height:10px}",
     ".ps2-bar{position:absolute;left:0;top:0;height:10px;border-radius:0 4px 4px 0;min-width:2px}",
     ".ps2-bar-val{position:absolute;top:50%;transform:translateY(-50%);padding-left:6px;font-size:.8rem;white-space:nowrap;color:var(--ps2-ink2);font-variant-numeric:tabular-nums}",
@@ -97,9 +102,10 @@
     return e;
   }
 
-  function pct(v) {
+  // decimals: what the source supports (the IEA publishes China in whole percentages).
+  function pct(v, decimals) {
     if (v === null || v === undefined) return "–";
-    return v.toFixed(1) + "%";
+    return v.toFixed(decimals === undefined ? 1 : decimals) + "%";
   }
 
   // Light or dark from the text colour the site gives us, so it follows the
@@ -162,13 +168,37 @@
       return d && !d.withheld && d.years && d.years.length;
     }
 
-    var jobs = [];
-    COUNTRIES.forEach(function (c) {
-      SECTORS.forEach(function (s) {
-        jobs.push(fetchSeries(c.key, s.key).then(function (d) { state.data[c.key + "|" + s.key] = d; }));
+    // A country with a whole-economy series but no sector data at all.
+    function economyOnly(c) {
+      return hasSeries(get(c.key, "Whole economy")) && SECTORS.every(function (s) {
+        var d = get(c.key, s.key);
+        return s.key === "Whole economy" || (!hasSeries(d) && !(d && d.withheld));
       });
-    });
-    Promise.all(jobs).then(function () {
+    }
+
+    function slot(c, i) {
+      return c.key in SLOT ? SLOT[c.key] : i % SERIES.light.length;
+    }
+    function dec(c) {
+      return c.decimals === undefined ? 1 : c.decimals;
+    }
+
+    // The API lists the published countries, so adding one needs no change to
+    // the page snippet; data-countries is only a fallback.
+    fetch(api + "?list=countries", { cache: "no-store" })
+      .then(function (resp) { return resp.ok ? resp.json() : null; })
+      .catch(function () { return null; })
+      .then(function (list) {
+        if (list && list.countries && list.countries.length) COUNTRIES = list.countries;
+        var jobs = [];
+        COUNTRIES.forEach(function (c) {
+          SECTORS.forEach(function (s) {
+            jobs.push(fetchSeries(c.key, s.key).then(function (d) { state.data[c.key + "|" + s.key] = d; }));
+          });
+        });
+        return Promise.all(jobs);
+      })
+      .then(function () {
       var any = Object.keys(state.data).some(function (k) { return hasSeries(state.data[k]); });
       if (!any) {
         ui.textContent = "";
@@ -192,22 +222,24 @@
         var tile = el("div", "ps2-kpi");
         var name = el("div", "ps2-kpi-name");
         var dot = el("span", "ps2-dot");
-        dot.dataset.series = i;
+        dot.dataset.series = slot(c, i);
         name.appendChild(dot);
         name.appendChild(el("span", "", c.label));
         tile.appendChild(name);
         if (hasSeries(d)) {
           var n = d.years.length, latest = d.electrification_rate[n - 1], year = d.years[n - 1];
-          tile.appendChild(el("div", "ps2-kpi-value", pct(latest)));
+          tile.appendChild(el("div", "ps2-kpi-value", pct(latest, dec(c))));
           tile.appendChild(el("div", "ps2-kpi-sub", "of final energy use, " + year));
+          // Change over the last TREND_YEARS, or since the series starts if it's shorter.
           var j = d.years.indexOf(year - TREND_YEARS);
+          if (j < 0 && n > 1) j = 0;
           if (j >= 0) {
             var delta = latest - d.electrification_rate[j];
             var line = el("div", "ps2-kpi-delta");
             var arrow = el("b", Math.abs(delta) < 0.05 ? "" : delta > 0 ? "ps2-up" : "ps2-down",
-              (Math.abs(delta) < 0.05 ? "No change" : (delta > 0 ? "▲ +" : "▼ ") + delta.toFixed(1) + " pts"));
+              (Math.abs(delta) < 0.05 ? "No change" : (delta > 0 ? "▲ +" : "▼ ") + delta.toFixed(dec(c)) + " pts"));
             line.appendChild(arrow);
-            line.appendChild(document.createTextNode(" since " + (year - TREND_YEARS)));
+            line.appendChild(document.createTextNode(" since " + d.years[j]));
             tile.appendChild(line);
           }
         } else {
@@ -239,21 +271,22 @@
         row.appendChild(label);
         COUNTRIES.forEach(function (c, i) {
           var d = get(c.key, s.key);
+          if (!hasSeries(d) && !(d && d.withheld) && economyOnly(c)) return;  // said once, below the rows
           var line = el("div", "ps2-bar-line");
           var track = el("div", "ps2-bar-track");
           if (hasSeries(d)) {
             var v = d.electrification_rate[d.electrification_rate.length - 1];
             var bar = el("div", "ps2-bar");
-            bar.dataset.series = i;
+            bar.dataset.series = slot(c, i);
             bar.style.width = Math.max(0, Math.min(100, v)) + "%";
-            var val = el("span", "ps2-bar-val", pct(v));
+            var val = el("span", "ps2-bar-val", pct(v, dec(c)));
             val.style.left = Math.max(0, Math.min(100, v)) + "%";
             track.appendChild(bar);
             track.appendChild(val);
+            line.appendChild(track);
           } else {
-            track.appendChild(el("span", "ps2-na", c.label + ": " + (d && d.withheld ? "not published" : "no data")));
+            line.appendChild(el("span", "ps2-na", c.label + ": " + (d && d.withheld ? "not published" : "no data")));
           }
-          line.appendChild(track);
           row.appendChild(line);
         });
         row.addEventListener("click", function () {
@@ -270,8 +303,11 @@
       var anyCaveat = SECTORS.some(function (s) {
         return COUNTRIES.some(function (c) { var d = get(c.key, s.key); return d && d.caveat; });
       });
+      var onlyEconomy = COUNTRIES.filter(economyOnly).map(function (c) { return c.label; });
       ui.appendChild(el("p", "ps2-hint", "Tap a sector to see its trend." +
-        (anyCaveat ? " * Official sources disagree on this figure; see the note under its trend." : "")));
+        (anyCaveat ? " * Read the note under its trend." : "") +
+        (onlyEconomy.length ? " " + onlyEconomy.join(" and ") + ": whole economy only, as no open data splits " +
+          (onlyEconomy.length > 1 ? "their" : "its") + " energy use by sector." : "")));
 
       // Trend for the selected sector.
       var thead = el("div", "ps2-head");
@@ -305,8 +341,9 @@
       about.appendChild(sourcesEl);
       about.appendChild(el("p", "",
         "US figures still include international aviation and shipping fuel, which the EIA doesn't publish " +
-        "separately; this lowers the US rate slightly. Every figure is cross-checked against independent " +
-        "sources before it's published, and the data refreshes twice a year."));
+        "separately; this lowers the US rate slightly. India's figures are fiscal years (April to March), " +
+        "labelled by the year they start in. Every figure is compared with independent sources before " +
+        "it's published, and the data refreshes twice a year."));
       ui.appendChild(about);
 
       paint();
@@ -318,7 +355,7 @@
       COUNTRIES.forEach(function (c, i) {
         var item = el("span");
         var key = el("span", kind === "rect" ? "ps2-key-rect" : "ps2-key-line");
-        key.dataset.series = i;
+        key.dataset.series = slot(c, i);
         item.appendChild(key);
         item.appendChild(document.createTextNode(c.label));
         box.appendChild(item);
@@ -359,25 +396,37 @@
         lastYear = Math.max(lastYear, d.years[n - 1]);
         d.electrification_rate.forEach(function (v) { if (v !== null && v > maxV) maxV = v; });
         var sizes = d.years.map(function (_, k) { return k === n - 1 ? 9 : 0; });
+        var col = cols[slot(c, i)];
         traces.push({
           x: d.years, y: d.electrification_rate, name: c.label, type: "scatter", mode: "lines+markers",
-          line: { width: 2, color: cols[i], shape: "linear" },
-          marker: { size: sizes, color: cols[i], line: { width: 2, color: surface } },
-          hovertemplate: "%{y:.1f}%<extra>" + c.label + "</extra>"
+          line: { width: 2, color: col, shape: "linear" },
+          marker: { size: sizes, color: col, line: { width: 2, color: surface } },
+          hovertemplate: "%{y:." + dec(c) + "f}%<extra>" + c.label + "</extra>"
         });
-        ends.push({ x: d.years[n - 1], y: d.electrification_rate[n - 1] });
+        ends.push({ x: d.years[n - 1], y: d.electrification_rate[n - 1], decimals: dec(c) });
       });
 
-      var ymax = niceMax(maxV), height = 300, margin = { t: 10, r: 52, b: 32, l: 44 };
-      // Value labels at line ends, unless they'd collide; then the tooltip and
-      // table carry the values (never stack labels apart from their lines).
-      var pxPerUnit = (height - margin.t - margin.b) / ymax;
-      var collide = ends.length > 1 && ends.some(function (a, i) {
-        return ends.some(function (b, j) { return j > i && Math.abs(a.y - b.y) * pxPerUnit < 16; });
-      });
-      var annotations = collide ? [] : ends.map(function (e) {
-        return { x: e.x, y: e.y, text: pct(e.y), showarrow: false, xanchor: "left", xshift: 8,
-                 font: { size: 12, color: ink2 } };
+      var ymax = niceMax(maxV), height = 300, margin = { t: 12, r: 64, b: 32, l: 44 };
+      // A value label at every line end (with four series they're how colour
+      // isn't the only cue). Labels that would overlap are spread apart and
+      // tied back to their line with a thin leader line.
+      var plotH = height - margin.t - margin.b, GAP = 15;
+      var labels = ends.map(function (e) {
+        var y = margin.t + plotH * (1 - e.y / ymax);
+        return { e: e, at: y, y: y };
+      }).sort(function (a, b) { return a.at - b.at; });
+      for (var k = 1; k < labels.length; k++) {
+        if (labels[k].y - labels[k - 1].y < GAP) labels[k].y = labels[k - 1].y + GAP;
+      }
+      var overflow = labels.length ? labels[labels.length - 1].y - (margin.t + plotH) : 0;
+      if (overflow > 0) labels.forEach(function (l) { l.y -= overflow; });
+      var annotations = labels.map(function (l) {
+        var moved = Math.abs(l.y - l.at) > 1;
+        return {
+          x: l.e.x, y: l.e.y, text: pct(l.e.y, l.e.decimals), xanchor: "left", font: { size: 12, color: ink2 },
+          showarrow: moved, ax: moved ? 20 : 0, ay: moved ? l.y - l.at : 0, xshift: moved ? 0 : 8,
+          arrowhead: 0, arrowwidth: 1, arrowcolor: axis, standoff: 5
+        };
       });
 
       chartEl.setAttribute("aria-label", trendTitle.textContent + ", electricity share of final energy by year. " +
@@ -406,8 +455,11 @@
       notesEl.textContent = "";
       COUNTRIES.forEach(function (c) {
         var d = get(c.key, state.sector);
-        if (d && d.withheld) notesEl.appendChild(el("div", "ps2-note", c.label + " not published yet: " + d.reason));
+        if (d && d.withheld) notesEl.appendChild(el("div", "ps2-note", c.label + " not published: " + d.reason));
         else if (d && d.caveat) notesEl.appendChild(el("div", "ps2-note", c.label + ": " + d.caveat));
+        else if (!hasSeries(d) && hasSeries(get(c.key, "Whole economy"))) {
+          notesEl.appendChild(el("div", "ps2-note", c.label + ": no open data for this sector; see Whole economy."));
+        }
       });
       if (state.sector === "Transport" && COUNTRIES.some(function (c) { return c.key === "US"; })) {
         notesEl.appendChild(el("div", "ps2-note",
@@ -420,6 +472,7 @@
       tableWrap.textContent = "";
       if (!state.showTable) return;
       var years = {};
+      var decimals = COUNTRIES.map(dec);
       var series = COUNTRIES.map(function (c) {
         var d = get(c.key, state.sector), byYear = {};
         if (hasSeries(d)) d.years.forEach(function (y, k) { years[y] = 1; byYear[y] = d.electrification_rate[k]; });
@@ -436,7 +489,7 @@
       Object.keys(years).map(Number).sort(function (a, b) { return b - a; }).forEach(function (y) {
         var r = el("tr");
         r.appendChild(el("td", "", String(y)));
-        series.forEach(function (s) { r.appendChild(el("td", "", y in s ? pct(s[y]) : "–")); });
+        series.forEach(function (s, k) { r.appendChild(el("td", "", y in s ? pct(s[y], decimals[k]) : "–")); });
         tbody.appendChild(r);
       });
       table.appendChild(tbody);
