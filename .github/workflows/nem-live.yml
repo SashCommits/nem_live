@@ -17,7 +17,7 @@ concurrency:
   # Only guards against two NEM runs overlapping. us-markets-live.yml has
   # its own group: neither needs to lock the other out, because each poll
   # cycle below re-syncs with the data branch immediately before writing
-  # (see the loop) rather than force-pushing a stale full tree.
+  # (see the loop) and retries a rejected push rather than force-pushing (see the loop).
   group: nem-live
   cancel-in-progress: false
 
@@ -63,7 +63,22 @@ jobs:
             git add -A
             if ! git diff --cached --quiet; then
               git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" commit -qm "Update $(date -u +%FT%TZ)"
-              git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data
+              # nem-live.yml and us-markets-live.yml both push to this branch
+              # every few minutes, so pushes occasionally collide (GitHub then
+              # rejects one, e.g. "fatal error in commit_refs"). Replay our
+              # commit on the latest data branch and retry, rather than
+              # force-pushing over the other workflow's commit, and never let
+              # one rejected push kill the whole multi-hour loop.
+              pushed=false
+              for attempt in 1 2 3; do
+                if git push -q origin data; then pushed=true; break; fi
+                sleep $((attempt * 5))
+                git fetch -q --depth 20 origin data && git -c user.name="nem-live" -c user.email="nem-live@users.noreply.github.com" rebase -q origin/data || { git rebase --abort 2>/dev/null; break; }
+              done
+              if [ "$pushed" != true ]; then
+                echo "::warning::Couldn't push this cycle; re-syncing and publishing again next cycle"
+                git fetch -q --depth 1 origin data && git reset -q --hard origin/data || true
+              fi
             fi
             cd ..
             elapsed=$((SECONDS - cycle_start))

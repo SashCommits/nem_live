@@ -1,0 +1,26 @@
+<!-- PowerSocket Global Electrification Tracker widget -->
+<div class="pselec"
+     data-api="https://REPLACE-WITH-YOUR-VERCEL-PROJECT.vercel.app/api/electrification"
+     data-countries='[{"key":"AU","label":"Australia"},{"key":"US","label":"United States"}]'
+     data-sectors='[{"key":"Whole economy","label":"Whole economy"},{"key":"Industry","label":"Industry"},{"key":"Residential buildings","label":"Residential"},{"key":"Commercial/services","label":"Commercial/services"},{"key":"Transport","label":"Transport"}]'>
+</div>
+
+<style>
+/* Colours are inherited from the surrounding page so this works on a light or dark theme. */
+.pselec{font-family:inherit;color:inherit;max-width:920px;margin:0 auto}
+.pselec .pe-controls{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between;margin-bottom:.75rem}
+.pselec .pe-group{display:flex;flex-wrap:wrap;border:1px solid rgba(128,128,128,.4);border-radius:8px;overflow:hidden}
+.pselec button.pe-btn{border:0;border-right:1px solid rgba(128,128,128,.3);background:transparent;color:inherit;font:inherit;font-size:.9rem;padding:.45rem .9rem;cursor:pointer;opacity:.65}
+.pselec button.pe-btn:last-child{border-right:0}
+.pselec button.pe-btn.active{background:rgba(128,128,128,.22);font-weight:600;opacity:1}
+.pselec .pe-stats{display:flex;gap:2rem;flex-wrap:wrap;margin:1rem 0}
+.pselec .pe-stat{min-width:140px}
+.pselec .pe-stat .pe-label{font-size:.9rem;opacity:.6}
+.pselec .pe-stat .pe-value{font-size:1.8rem;font-weight:600;margin-top:.15rem}
+.pselec .pe-chart{width:100%;height:380px}
+.pselec .pe-meta{font-size:.75rem;opacity:.55;margin-top:.5rem}
+.pselec .pe-error{padding:2rem 1rem;text-align:center;border:1px solid rgba(200,80,80,.5);border-radius:8px;opacity:.9}
+</style>
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/SashCommits/nem_live@main/electrification-widget.js"></script>
