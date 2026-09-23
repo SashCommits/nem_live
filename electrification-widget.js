@@ -69,7 +69,15 @@
     addButtons(sectorsEl, SECTORS, function (s) { return s.key === state.sector; },
       function (s) { state.sector = s.key; });
 
+    // Plotly.newPlot only replaces its own plot, not other children of
+    // chartEl, so clear the chart area fully before showing either.
+    function clearChart() {
+      if (window.Plotly) Plotly.purge(chartEl);
+      chartEl.innerHTML = "";
+    }
+
     function showError(message) {
+      clearChart();
       chartEl.innerHTML = '<div class="pe-error">' + message + "</div>";
       statsEl.innerHTML = "";
       metaEl.textContent = "";
@@ -88,11 +96,17 @@
       });
     }
 
+    var latestRequest = 0;
+
     function render() {
+      // Ignore responses for a selection the reader has already clicked away from.
+      var request = ++latestRequest;
       fetchSeries(state.country, state.sector)
-        .then(renderChart)
+        .then(function (data) {
+          if (request === latestRequest) renderChart(data);
+        })
         .catch(function () {
-          showError("Electrification data is unavailable right now.");
+          if (request === latestRequest) showError("Electrification data is unavailable right now.");
         });
     }
 
@@ -105,6 +119,7 @@
         showError("No data yet for this country/sector.");
         return;
       }
+      clearChart();
       var fg = getComputedStyle(root).color;
       var grid = "rgba(128,128,128,0.25)";
 
@@ -123,7 +138,7 @@
           paper_bgcolor: "rgba(0,0,0,0)",
           plot_bgcolor: "rgba(0,0,0,0)",
           font: { color: fg },
-          xaxis: { gridcolor: grid, zerolinecolor: grid, dtick: 1 },
+          xaxis: { gridcolor: grid, zerolinecolor: grid, tickformat: "d" },
           yaxis: { title: "% of final energy", gridcolor: grid, zerolinecolor: grid, rangemode: "tozero" },
           hovermode: "x"
         },
