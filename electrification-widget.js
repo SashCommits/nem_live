@@ -97,6 +97,10 @@
     }
 
     function renderChart(data) {
+      if (data.withheld) {
+        showError("Not published yet: " + data.reason);
+        return;
+      }
       if (!data.years || !data.years.length) {
         showError("No data yet for this country/sector.");
         return;
