@@ -6,6 +6,11 @@
 // Unlike widget.js (NEM/ERCOT live 5-min feeds), this calls a private API
 // that returns one country/sector's year series at a time -- there's no
 // bulk-data endpoint for this page to fetch from.
+//
+// Layout: headline share per country, a by-sector comparison (tap a row),
+// that sector's trend for every country on one chart, then sources and
+// definitions behind "About this data". Styles are injected here rather than
+// in the page snippet, so layout changes don't need a re-paste in Ghost.
 (function () {
   var DEFAULT_COUNTRIES = [
     { key: "AU", label: "Australia" },
@@ -18,173 +23,454 @@
     { key: "Commercial/services", label: "Commercial/services" },
     { key: "Transport", label: "Transport" }
   ];
-  var LINE_COLOR = "#2F9E7E";
+  // Categorical slots 1 and 2 (blue, orange), validated for CVD separation and
+  // 3:1 contrast on white and on the site's dark background. Order is fixed:
+  // a country keeps its colour whatever else is shown.
+  var SERIES = { light: ["#2a78d6", "#eb6834"], dark: ["#3987e5", "#d95926"] };
+  var TREND_YEARS = 10;
+
+  var CSS = [
+    ".ps2{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;line-height:1.45;color:var(--ps2-ink);",
+    "  --ps2-ink:#0b0b0b;--ps2-ink2:#52514e;--ps2-muted:#6e6c66;--ps2-grid:#e1e0d9;--ps2-line:#c3c2b7;",
+    "  --ps2-wash:rgba(11,11,11,.05);--ps2-ring:rgba(11,11,11,.12);--ps2-up:#006300;--ps2-down:#b42323;--ps2-note:#a86b00}",
+    ".ps2.ps2-dark{--ps2-ink:#fff;--ps2-ink2:#c3c2b7;--ps2-muted:#9a988f;--ps2-grid:#2c2c2a;--ps2-line:#44443f;",
+    "  --ps2-wash:rgba(255,255,255,.06);--ps2-ring:rgba(255,255,255,.14);--ps2-up:#3cc13c;--ps2-down:#f07b7b;--ps2-note:#e0a526}",
+    ".ps2 *{box-sizing:border-box}",
+    ".ps2-lede{margin:0 0 1rem;font-size:.95rem;color:var(--ps2-ink2)}",
+    ".ps2-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.75rem;margin-bottom:2rem}",
+    ".ps2-kpi{padding:.9rem 1rem;border:1px solid var(--ps2-ring);border-radius:10px}",
+    ".ps2-kpi-name{display:flex;align-items:center;gap:.45rem;font-size:.9rem;color:var(--ps2-ink2)}",
+    ".ps2-dot{width:10px;height:10px;border-radius:50%;flex:none}",
+    ".ps2-kpi-value{font-size:2.4rem;font-weight:600;line-height:1.1;margin:.35rem 0 .1rem;letter-spacing:-.01em}",
+    ".ps2-kpi-sub{font-size:.8rem;color:var(--ps2-muted)}",
+    ".ps2-kpi-delta{font-size:.85rem;margin-top:.35rem;color:var(--ps2-ink2)}",
+    ".ps2-kpi-delta b{font-weight:600}",
+    ".ps2-up{color:var(--ps2-up)}.ps2-down{color:var(--ps2-down)}",
+    ".ps2-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.25rem 1rem;margin:0 0 .6rem}",
+    ".ps2-h{margin:0;font-family:inherit;font-size:1.05rem;font-weight:600;line-height:1.3;letter-spacing:0;color:var(--ps2-ink)}",
+    ".ps2-legend{display:flex;gap:1rem;font-size:.8rem;color:var(--ps2-ink2)}",
+    ".ps2-legend span{display:inline-flex;align-items:center;gap:.35rem}",
+    ".ps2-key-rect{width:12px;height:8px;border-radius:2px}",
+    ".ps2-key-line{width:14px;height:2px;border-radius:1px}",
+    ".ps2-rows{display:flex;flex-direction:column;gap:2px;margin-bottom:.4rem}",
+    ".ps2-row{all:unset;box-sizing:border-box;display:block;width:100%;padding:.55rem .6rem;border-radius:8px;cursor:pointer;color:inherit;font:inherit}",
+    ".ps2-row:hover{background:var(--ps2-wash)}",
+    ".ps2-row:focus-visible{outline:2px solid var(--ps2-ink2);outline-offset:1px}",
+    ".ps2-row[aria-pressed=true]{background:var(--ps2-wash);box-shadow:inset 3px 0 0 var(--ps2-ink2)}",
+    ".ps2-row-label{display:flex;justify-content:space-between;font-size:.9rem;margin-bottom:.3rem}",
+    ".ps2-row-label .ps2-go{color:var(--ps2-muted);font-size:.8rem}",
+    ".ps2-bar-line{display:flex;align-items:center;gap:.5rem;height:14px;margin-top:3px}",
+    ".ps2-bar-track{flex:1;position:relative;height:10px}",
+    ".ps2-bar{position:absolute;left:0;top:0;height:10px;border-radius:0 4px 4px 0;min-width:2px}",
+    ".ps2-bar-val{position:absolute;top:50%;transform:translateY(-50%);padding-left:6px;font-size:.8rem;white-space:nowrap;color:var(--ps2-ink2);font-variant-numeric:tabular-nums}",
+    ".ps2-na{font-size:.8rem;color:var(--ps2-muted)}",
+    ".ps2-hint{font-size:.8rem;color:var(--ps2-muted);margin:0 0 2rem}",
+    ".ps2-chart{width:100%;height:300px;transition:opacity .15s}",
+    ".ps2-notes{margin-top:.5rem}",
+    ".ps2-note{font-size:.85rem;margin-top:.5rem;padding:.5rem .75rem;border-left:3px solid var(--ps2-note);background:var(--ps2-wash);border-radius:0 6px 6px 0;color:var(--ps2-ink)}",
+    ".ps2-tools{margin-top:.5rem}",
+    ".ps2-link{all:unset;cursor:pointer;font-size:.8rem;color:var(--ps2-ink2);text-decoration:underline;text-underline-offset:3px}",
+    ".ps2-link:focus-visible{outline:2px solid var(--ps2-ink2)}",
+    ".ps2-table-wrap{overflow-x:auto;margin-top:.5rem}",
+    ".ps2-table{border-collapse:collapse;font-size:.85rem;font-variant-numeric:tabular-nums;min-width:260px}",
+    ".ps2-table th,.ps2-table td{padding:.3rem .9rem .3rem 0;text-align:right;border-bottom:1px solid var(--ps2-grid)}",
+    ".ps2-table th:first-child,.ps2-table td:first-child{text-align:left}",
+    ".ps2-table th{font-weight:600;color:var(--ps2-ink2)}",
+    ".ps2-about{margin-top:2rem;border-top:1px solid var(--ps2-grid);padding-top:.75rem;font-size:.85rem;color:var(--ps2-ink2)}",
+    ".ps2-about summary{cursor:pointer;font-weight:600;color:var(--ps2-ink)}",
+    ".ps2-about p{margin:.6rem 0}",
+    ".ps2-status{padding:2rem 0;text-align:center;color:var(--ps2-muted)}"
+  ].join("\n");
+
+  function injectStyles() {
+    if (document.getElementById("ps2-styles")) return;
+    var style = document.createElement("style");
+    style.id = "ps2-styles";
+    style.textContent = CSS;
+    document.head.appendChild(style);
+  }
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function pct(v) {
+    if (v === null || v === undefined) return "–";
+    return v.toFixed(1) + "%";
+  }
+
+  // Light or dark from the text colour the site gives us, so it follows the
+  // Ghost theme toggle as well as the OS setting.
+  function isDark(node) {
+    var m = getComputedStyle(node).color.match(/\d+(\.\d+)?/g);
+    if (!m) return false;
+    var lum = (0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2]) / 255;
+    return lum > 0.6;
+  }
+
+  function pageBackground(node) {
+    for (var n = node; n && n.nodeType === 1; n = n.parentElement) {
+      var bg = getComputedStyle(n).backgroundColor;
+      if (bg && !/rgba\(0, 0, 0, 0\)|transparent/.test(bg)) return bg;
+    }
+    return "#ffffff";
+  }
+
+  function niceMax(v) {
+    var steps = [5, 10, 15, 20, 25, 30, 40, 50, 60, 70, 80, 90, 100];
+    for (var i = 0; i < steps.length; i++) if (v * 1.15 <= steps[i]) return steps[i];
+    return 100;
+  }
 
   function initWidget(root) {
     if (!root.dataset.api) return;
+    injectStyles();
     var api = root.dataset.api;
     var COUNTRIES = DEFAULT_COUNTRIES, SECTORS = DEFAULT_SECTORS;
-    if (root.dataset.countries) {
-      try { COUNTRIES = JSON.parse(root.dataset.countries); } catch (e) { /* fall back to default */ }
+    try { if (root.dataset.countries) COUNTRIES = JSON.parse(root.dataset.countries); } catch (e) { /* default */ }
+    try { if (root.dataset.sectors) SECTORS = JSON.parse(root.dataset.sectors); } catch (e) { /* default */ }
+
+    var state = { sector: SECTORS[0].key, data: {}, showTable: false };
+    var ui = el("div", "ps2");
+    root.textContent = "";
+    root.appendChild(ui);
+    ui.appendChild(el("div", "ps2-status", "Loading electrification data…"));
+
+    function colors() {
+      return SERIES[ui.classList.contains("ps2-dark") ? "dark" : "light"];
     }
-    if (root.dataset.sectors) {
-      try { SECTORS = JSON.parse(root.dataset.sectors); } catch (e) { /* fall back to default */ }
+    function applyTheme() {
+      ui.classList.toggle("ps2-dark", isDark(root));
     }
-
-    var state = { country: COUNTRIES[0].key, sector: SECTORS[0].key, cache: {} };
-
-    root.innerHTML =
-      '<div class="pe-controls">' +
-      '<div class="pe-group" data-role="countries"></div>' +
-      '<div class="pe-group" data-role="sectors"></div>' +
-      "</div>" +
-      '<div class="pe-stats" data-role="stats"></div>' +
-      '<div class="pe-chart" data-role="chart"></div>' +
-      // Styled here rather than in the page snippet, so adding it didn't need a re-paste in Ghost.
-      '<div class="pe-caveat" data-role="caveat" style="display:none;font-size:.85rem;margin-top:.5rem;' +
-      'padding:.5rem .75rem;border-left:3px solid rgba(214,160,40,.85);background:rgba(214,160,40,.1)"></div>' +
-      '<div class="pe-meta" data-role="meta"></div>';
-
-    var countriesEl = root.querySelector('[data-role="countries"]');
-    var sectorsEl = root.querySelector('[data-role="sectors"]');
-    var statsEl = root.querySelector('[data-role="stats"]');
-    var chartEl = root.querySelector('[data-role="chart"]');
-    var metaEl = root.querySelector('[data-role="meta"]');
-    var caveatEl = root.querySelector('[data-role="caveat"]');
-
-    // A documented disagreement between official sources: shown in full, not in the fine print.
-    function showCaveat(text) {
-      caveatEl.textContent = text ? "Note: " + text : "";
-      caveatEl.style.display = text ? "" : "none";
-    }
-
-    function addButtons(group, items, isActive, onPick) {
-      items.forEach(function (item) {
-        var b = document.createElement("button");
-        b.className = "pe-btn" + (isActive(item) ? " active" : "");
-        b.textContent = item.label;
-        b.addEventListener("click", function () {
-          onPick(item);
-          Array.prototype.forEach.call(group.children, function (el) {
-            el.classList.toggle("active", el === b);
-          });
-          render();
-        });
-        group.appendChild(b);
-      });
-    }
-
-    addButtons(countriesEl, COUNTRIES, function (c) { return c.key === state.country; },
-      function (c) { state.country = c.key; });
-    addButtons(sectorsEl, SECTORS, function (s) { return s.key === state.sector; },
-      function (s) { state.sector = s.key; });
-
-    // Plotly.newPlot only replaces its own plot, not other children of
-    // chartEl, so clear the chart area fully before showing either.
-    function clearChart() {
-      if (window.Plotly) Plotly.purge(chartEl);
-      chartEl.innerHTML = "";
-    }
-
-    function showError(message) {
-      clearChart();
-      chartEl.innerHTML = '<div class="pe-error">' + message + "</div>";
-      statsEl.innerHTML = "";
-      metaEl.textContent = "";
-      showCaveat(null);
-    }
+    applyTheme();
 
     function fetchSeries(country, sector) {
-      var cacheKey = country + "|" + sector;
-      if (state.cache[cacheKey]) return Promise.resolve(state.cache[cacheKey]);
       var url = api + "?country=" + encodeURIComponent(country) + "&sector=" + encodeURIComponent(sector);
-      return fetch(url, { cache: "no-store" }).then(function (resp) {
-        if (!resp.ok) throw new Error("status " + resp.status);
-        return resp.json();
-      }).then(function (json) {
-        state.cache[cacheKey] = json;
-        return json;
+      return fetch(url, { cache: "no-store" })
+        .then(function (resp) { if (!resp.ok) throw new Error("status " + resp.status); return resp.json(); })
+        .catch(function () { return null; });
+    }
+
+    function get(country, sector) {
+      return state.data[country + "|" + sector];
+    }
+
+    function hasSeries(d) {
+      return d && !d.withheld && d.years && d.years.length;
+    }
+
+    var jobs = [];
+    COUNTRIES.forEach(function (c) {
+      SECTORS.forEach(function (s) {
+        jobs.push(fetchSeries(c.key, s.key).then(function (d) { state.data[c.key + "|" + s.key] = d; }));
+      });
+    });
+    Promise.all(jobs).then(function () {
+      var any = Object.keys(state.data).some(function (k) { return hasSeries(state.data[k]); });
+      if (!any) {
+        ui.textContent = "";
+        ui.appendChild(el("div", "ps2-status", "Electrification data is unavailable right now."));
+        return;
+      }
+      build();
+    });
+
+    var chartEl, trendTitle, notesEl, tableWrap, tableBtn, rowsEl, sourcesEl;
+
+    function build() {
+      ui.textContent = "";
+      ui.appendChild(el("p", "ps2-lede",
+        "How much of each country's final energy use comes from electricity, the IEA's measure of electrification."));
+
+      // Headline: whole-economy share per country.
+      var kpis = el("div", "ps2-kpis");
+      COUNTRIES.forEach(function (c, i) {
+        var d = get(c.key, "Whole economy");
+        var tile = el("div", "ps2-kpi");
+        var name = el("div", "ps2-kpi-name");
+        var dot = el("span", "ps2-dot");
+        dot.dataset.series = i;
+        name.appendChild(dot);
+        name.appendChild(el("span", "", c.label));
+        tile.appendChild(name);
+        if (hasSeries(d)) {
+          var n = d.years.length, latest = d.electrification_rate[n - 1], year = d.years[n - 1];
+          tile.appendChild(el("div", "ps2-kpi-value", pct(latest)));
+          tile.appendChild(el("div", "ps2-kpi-sub", "of final energy use, " + year));
+          var j = d.years.indexOf(year - TREND_YEARS);
+          if (j >= 0) {
+            var delta = latest - d.electrification_rate[j];
+            var line = el("div", "ps2-kpi-delta");
+            var arrow = el("b", Math.abs(delta) < 0.05 ? "" : delta > 0 ? "ps2-up" : "ps2-down",
+              (Math.abs(delta) < 0.05 ? "No change" : (delta > 0 ? "▲ +" : "▼ ") + delta.toFixed(1) + " pts"));
+            line.appendChild(arrow);
+            line.appendChild(document.createTextNode(" since " + (year - TREND_YEARS)));
+            tile.appendChild(line);
+          }
+        } else {
+          tile.appendChild(el("div", "ps2-kpi-sub", "Not available"));
+        }
+        kpis.appendChild(tile);
+      });
+      ui.appendChild(kpis);
+
+      // By sector: latest share, every country, one 0-100% scale.
+      var latestYear = 0;
+      Object.keys(state.data).forEach(function (k) {
+        var d = state.data[k];
+        if (hasSeries(d)) latestYear = Math.max(latestYear, d.updated_through || d.years[d.years.length - 1]);
+      });
+      var head = el("div", "ps2-head");
+      head.appendChild(el("h3", "ps2-h", "By sector, " + latestYear));
+      head.appendChild(legend("rect"));
+      ui.appendChild(head);
+      rowsEl = el("div", "ps2-rows");
+      SECTORS.forEach(function (s) {
+        var row = el("button", "ps2-row");
+        row.type = "button";
+        row.dataset.sector = s.key;
+        var label = el("div", "ps2-row-label");
+        var caveat = COUNTRIES.some(function (c) { var d = get(c.key, s.key); return d && d.caveat; });
+        label.appendChild(el("span", "", s.label + (caveat ? " *" : "")));
+        label.appendChild(el("span", "ps2-go", "Trend ›"));
+        row.appendChild(label);
+        COUNTRIES.forEach(function (c, i) {
+          var d = get(c.key, s.key);
+          var line = el("div", "ps2-bar-line");
+          var track = el("div", "ps2-bar-track");
+          if (hasSeries(d)) {
+            var v = d.electrification_rate[d.electrification_rate.length - 1];
+            var bar = el("div", "ps2-bar");
+            bar.dataset.series = i;
+            bar.style.width = Math.max(0, Math.min(100, v)) + "%";
+            var val = el("span", "ps2-bar-val", pct(v));
+            val.style.left = Math.max(0, Math.min(100, v)) + "%";
+            track.appendChild(bar);
+            track.appendChild(val);
+          } else {
+            track.appendChild(el("span", "ps2-na", c.label + ": " + (d && d.withheld ? "not published" : "no data")));
+          }
+          line.appendChild(track);
+          row.appendChild(line);
+        });
+        row.addEventListener("click", function () {
+          state.sector = s.key;
+          state.showTable = false;
+          renderTrend();
+          if (chartEl.getBoundingClientRect().top > window.innerHeight * 0.8) {
+            trendTitle.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+        rowsEl.appendChild(row);
+      });
+      ui.appendChild(rowsEl);
+      var anyCaveat = SECTORS.some(function (s) {
+        return COUNTRIES.some(function (c) { var d = get(c.key, s.key); return d && d.caveat; });
+      });
+      ui.appendChild(el("p", "ps2-hint", "Tap a sector to see its trend." +
+        (anyCaveat ? " * Official sources disagree on this figure; see the note under its trend." : "")));
+
+      // Trend for the selected sector.
+      var thead = el("div", "ps2-head");
+      trendTitle = el("h3", "ps2-h");
+      thead.appendChild(trendTitle);
+      thead.appendChild(legend("line"));
+      ui.appendChild(thead);
+      chartEl = el("div", "ps2-chart");
+      chartEl.setAttribute("role", "img");
+      ui.appendChild(chartEl);
+      notesEl = el("div", "ps2-notes");
+      ui.appendChild(notesEl);
+      var tools = el("div", "ps2-tools");
+      tableBtn = el("button", "ps2-link");
+      tableBtn.type = "button";
+      tableBtn.addEventListener("click", function () { state.showTable = !state.showTable; renderTable(); });
+      tools.appendChild(tableBtn);
+      ui.appendChild(tools);
+      tableWrap = el("div", "ps2-table-wrap");
+      ui.appendChild(tableWrap);
+
+      // Sources and definitions, out of the way until asked for.
+      var about = el("details", "ps2-about");
+      about.appendChild(el("summary", "", "About this data"));
+      about.appendChild(el("p", "",
+        "Electrification here is electricity's share of final energy consumption, on the IEA definition: " +
+        "energy used by homes, businesses, industry and transport. Fuel burned to generate electricity, the " +
+        "energy industry's own use, international aviation and shipping, and non-energy uses such as " +
+        "chemical feedstocks are excluded."));
+      sourcesEl = el("div");
+      about.appendChild(sourcesEl);
+      about.appendChild(el("p", "",
+        "US figures still include international aviation and shipping fuel, which the EIA doesn't publish " +
+        "separately; this lowers the US rate slightly. Every figure is cross-checked against independent " +
+        "sources before it's published, and the data refreshes twice a year."));
+      ui.appendChild(about);
+
+      paint();
+      renderTrend();
+    }
+
+    function legend(kind) {
+      var box = el("div", "ps2-legend");
+      COUNTRIES.forEach(function (c, i) {
+        var item = el("span");
+        var key = el("span", kind === "rect" ? "ps2-key-rect" : "ps2-key-line");
+        key.dataset.series = i;
+        item.appendChild(key);
+        item.appendChild(document.createTextNode(c.label));
+        box.appendChild(item);
+      });
+      return box;
+    }
+
+    // Series colours live on data-series attributes so a theme change is one repaint.
+    function paint() {
+      var cols = colors();
+      Array.prototype.forEach.call(ui.querySelectorAll("[data-series]"), function (n) {
+        n.style.background = cols[+n.dataset.series];
       });
     }
 
-    var latestRequest = 0;
+    function sectorLabel(key) {
+      for (var i = 0; i < SECTORS.length; i++) if (SECTORS[i].key === key) return SECTORS[i].label;
+      return key;
+    }
 
-    function render() {
-      // Ignore responses for a selection the reader has already clicked away from.
-      var request = ++latestRequest;
-      fetchSeries(state.country, state.sector)
-        .then(function (data) {
-          if (request === latestRequest) renderChart(data);
-        })
-        .catch(function () {
-          if (request === latestRequest) showError("Electrification data is unavailable right now.");
+    function renderTrend() {
+      Array.prototype.forEach.call(rowsEl.children, function (r) {
+        r.setAttribute("aria-pressed", r.dataset.sector === state.sector ? "true" : "false");
+      });
+      trendTitle.textContent = sectorLabel(state.sector) + " over time";
+      var cols = colors();
+      var dark = ui.classList.contains("ps2-dark");
+      var ink2 = dark ? "#c3c2b7" : "#52514e", muted = dark ? "#9a988f" : "#6e6c66";
+      var grid = dark ? "#2c2c2a" : "#e1e0d9", axis = dark ? "#44443f" : "#c3c2b7";
+      var surface = pageBackground(root);
+
+      var traces = [], maxV = 0, ends = [], firstYear = Infinity, lastYear = -Infinity;
+      COUNTRIES.forEach(function (c, i) {
+        var d = get(c.key, state.sector);
+        if (!hasSeries(d)) return;
+        var n = d.years.length;
+        firstYear = Math.min(firstYear, d.years[0]);
+        lastYear = Math.max(lastYear, d.years[n - 1]);
+        d.electrification_rate.forEach(function (v) { if (v !== null && v > maxV) maxV = v; });
+        var sizes = d.years.map(function (_, k) { return k === n - 1 ? 9 : 0; });
+        traces.push({
+          x: d.years, y: d.electrification_rate, name: c.label, type: "scatter", mode: "lines+markers",
+          line: { width: 2, color: cols[i], shape: "linear" },
+          marker: { size: sizes, color: cols[i], line: { width: 2, color: surface } },
+          hovertemplate: "%{y:.1f}%<extra>" + c.label + "</extra>"
         });
+        ends.push({ x: d.years[n - 1], y: d.electrification_rate[n - 1] });
+      });
+
+      var ymax = niceMax(maxV), height = 300, margin = { t: 10, r: 52, b: 32, l: 44 };
+      // Value labels at line ends, unless they'd collide; then the tooltip and
+      // table carry the values (never stack labels apart from their lines).
+      var pxPerUnit = (height - margin.t - margin.b) / ymax;
+      var collide = ends.length > 1 && ends.some(function (a, i) {
+        return ends.some(function (b, j) { return j > i && Math.abs(a.y - b.y) * pxPerUnit < 16; });
+      });
+      var annotations = collide ? [] : ends.map(function (e) {
+        return { x: e.x, y: e.y, text: pct(e.y), showarrow: false, xanchor: "left", xshift: 8,
+                 font: { size: 12, color: ink2 } };
+      });
+
+      chartEl.setAttribute("aria-label", trendTitle.textContent + ", electricity share of final energy by year. " +
+        "A data table is available below the chart.");
+      Plotly.react(chartEl, traces, {
+        height: height, margin: margin,
+        paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)",
+        font: { family: "system-ui,-apple-system,'Segoe UI',Roboto,sans-serif", size: 12, color: muted },
+        showlegend: false, hovermode: "x unified",
+        hoverlabel: { bgcolor: surface, bordercolor: axis, font: { color: dark ? "#fff" : "#0b0b0b", size: 13 } },
+        // Pinned: otherwise Plotly widens the range to fit the end labels.
+        xaxis: { range: [firstYear - 0.5, lastYear + 0.5], tickformat: "d", gridcolor: grid, linecolor: axis, showline: true, zeroline: false,
+                 fixedrange: true, ticks: "", showspikes: true, spikemode: "across", spikethickness: -1,
+                 spikecolor: axis, spikedash: "solid" },
+        yaxis: { range: [0, ymax], ticksuffix: "%", gridcolor: grid, zeroline: false, fixedrange: true,
+                 rangemode: "tozero" },
+        annotations: annotations
+      }, { responsive: true, displayModeBar: false });
+
+      renderNotes();
+      renderTable();
+      renderSources();
     }
 
-    function renderChart(data) {
-      if (data.withheld) {
-        showError("Not published yet: " + data.reason);
-        return;
+    function renderNotes() {
+      notesEl.textContent = "";
+      COUNTRIES.forEach(function (c) {
+        var d = get(c.key, state.sector);
+        if (d && d.withheld) notesEl.appendChild(el("div", "ps2-note", c.label + " not published yet: " + d.reason));
+        else if (d && d.caveat) notesEl.appendChild(el("div", "ps2-note", c.label + ": " + d.caveat));
+      });
+      if (state.sector === "Transport" && COUNTRIES.some(function (c) { return c.key === "US"; })) {
+        notesEl.appendChild(el("div", "ps2-note",
+          "United States: the EIA counts home EV charging as residential electricity, so US transport understates EV uptake."));
       }
-      if (!data.years || !data.years.length) {
-        showError("No data yet for this country/sector.");
-        return;
-      }
-      clearChart();
-      var fg = getComputedStyle(root).color;
-      var grid = "rgba(128,128,128,0.25)";
-
-      Plotly.newPlot(
-        chartEl,
-        [{
-          x: data.years,
-          y: data.electrification_rate,
-          mode: "lines+markers",
-          line: { width: 2.5, color: LINE_COLOR },
-          marker: { size: 5, color: LINE_COLOR },
-          hovertemplate: "%{x}: %{y:.1f}%<extra></extra>"
-        }],
-        {
-          margin: { t: 20, r: 20, b: 40, l: 50 },
-          paper_bgcolor: "rgba(0,0,0,0)",
-          plot_bgcolor: "rgba(0,0,0,0)",
-          font: { color: fg },
-          xaxis: { gridcolor: grid, zerolinecolor: grid, tickformat: "d" },
-          yaxis: { title: "% of final energy", gridcolor: grid, zerolinecolor: grid, rangemode: "tozero" },
-          hovermode: "x"
-        },
-        { responsive: true, displayModeBar: false }
-      );
-
-      var latest = data.electrification_rate[data.electrification_rate.length - 1];
-      var first = data.electrification_rate[0];
-      var html =
-        stat("Latest (" + data.updated_through + ")", latest !== null ? latest.toFixed(1) + "%" : "–") +
-        stat("Change since " + data.years[0], (latest !== null && first !== null) ? (latest - first >= 0 ? "+" : "") + (latest - first).toFixed(1) + " pts" : "–");
-      statsEl.innerHTML = html;
-
-      var meta = "Source: " + data.source_name + " (" + data.licence + ")";
-      if (data.cross_checked_against && data.cross_checked_against.length) {
-        meta += " • Cross-checked against: " + data.cross_checked_against.join("; ");
-      }
-      if (state.country === "US" && state.sector === "Transport") {
-        meta += " • EIA counts home EV charging as residential electricity, so this understates EV uptake.";
-      }
-      metaEl.textContent = meta;
-      showCaveat(data.caveat);
     }
 
-    function stat(label, value) {
-      return (
-        '<div class="pe-stat"><div class="pe-label">' +
-        label +
-        '</div><div class="pe-value">' +
-        value +
-        "</div></div>"
-      );
+    function renderTable() {
+      tableBtn.textContent = state.showTable ? "Hide data table" : "Show data table";
+      tableWrap.textContent = "";
+      if (!state.showTable) return;
+      var years = {};
+      var series = COUNTRIES.map(function (c) {
+        var d = get(c.key, state.sector), byYear = {};
+        if (hasSeries(d)) d.years.forEach(function (y, k) { years[y] = 1; byYear[y] = d.electrification_rate[k]; });
+        return byYear;
+      });
+      var table = el("table", "ps2-table");
+      var tr = el("tr");
+      tr.appendChild(el("th", "", "Year"));
+      COUNTRIES.forEach(function (c) { tr.appendChild(el("th", "", c.label)); });
+      var thead = el("thead");
+      thead.appendChild(tr);
+      table.appendChild(thead);
+      var tbody = el("tbody");
+      Object.keys(years).map(Number).sort(function (a, b) { return b - a; }).forEach(function (y) {
+        var r = el("tr");
+        r.appendChild(el("td", "", String(y)));
+        series.forEach(function (s) { r.appendChild(el("td", "", y in s ? pct(s[y]) : "–")); });
+        tbody.appendChild(r);
+      });
+      table.appendChild(tbody);
+      tableWrap.appendChild(table);
     }
 
-    render();
+    function renderSources() {
+      sourcesEl.textContent = "";
+      COUNTRIES.forEach(function (c) {
+        var d = get(c.key, state.sector) || get(c.key, "Whole economy");
+        if (!d || !d.source_name) return;
+        var p = el("p");
+        var b = el("b", "", c.label + ": ");
+        p.appendChild(b);
+        var text = d.source_name + " (" + d.licence + ").";
+        if (d.cross_checked_against && d.cross_checked_against.length) {
+          text += " " + sectorLabel(state.sector) + " cross-checked against " + d.cross_checked_against.join("; ") + ".";
+        }
+        p.appendChild(document.createTextNode(text));
+        sourcesEl.appendChild(p);
+      });
+    }
+
+    // Follow the site's light/dark toggle (Ghost themes flip a class or
+    // data attribute on <html> or <body>).
+    var lastDark = ui.classList.contains("ps2-dark");
+    var watcher = new MutationObserver(function () {
+      applyTheme();
+      var now = ui.classList.contains("ps2-dark");
+      if (now !== lastDark && chartEl) { lastDark = now; paint(); renderTrend(); }
+    });
+    [document.documentElement, document.body].forEach(function (n) {
+      if (n) watcher.observe(n, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
+    });
   }
 
   Array.prototype.forEach.call(document.querySelectorAll(".pselec"), initWidget);
