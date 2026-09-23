@@ -40,6 +40,9 @@
       "</div>" +
       '<div class="pe-stats" data-role="stats"></div>' +
       '<div class="pe-chart" data-role="chart"></div>' +
+      // Styled here rather than in the page snippet, so adding it didn't need a re-paste in Ghost.
+      '<div class="pe-caveat" data-role="caveat" style="display:none;font-size:.85rem;margin-top:.5rem;' +
+      'padding:.5rem .75rem;border-left:3px solid rgba(214,160,40,.85);background:rgba(214,160,40,.1)"></div>' +
       '<div class="pe-meta" data-role="meta"></div>';
 
     var countriesEl = root.querySelector('[data-role="countries"]');
@@ -47,6 +50,13 @@
     var statsEl = root.querySelector('[data-role="stats"]');
     var chartEl = root.querySelector('[data-role="chart"]');
     var metaEl = root.querySelector('[data-role="meta"]');
+    var caveatEl = root.querySelector('[data-role="caveat"]');
+
+    // A documented disagreement between official sources: shown in full, not in the fine print.
+    function showCaveat(text) {
+      caveatEl.textContent = text ? "Note: " + text : "";
+      caveatEl.style.display = text ? "" : "none";
+    }
 
     function addButtons(group, items, isActive, onPick) {
       items.forEach(function (item) {
@@ -81,6 +91,7 @@
       chartEl.innerHTML = '<div class="pe-error">' + message + "</div>";
       statsEl.innerHTML = "";
       metaEl.textContent = "";
+      showCaveat(null);
     }
 
     function fetchSeries(country, sector) {
@@ -160,6 +171,7 @@
         meta += " • EIA counts home EV charging as residential electricity, so this understates EV uptake.";
       }
       metaEl.textContent = meta;
+      showCaveat(data.caveat);
     }
 
     function stat(label, value) {
