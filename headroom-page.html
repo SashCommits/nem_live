@@ -1,0 +1,19 @@
+<!-- PowerSocket NEM Headroom Explorer: paste into a Ghost HTML card on the
+     product's page. Subscribers only: the data comes from the private
+     headroom service, which checks each visitor is a paying member.
+     data-api   the service's address (the Vercel project for powersocket-grid-headroom)
+     data-signup / data-upgrade   optional: where "Subscribe" and "See plans" go
+                (default: Ghost Portal's sign-up and plans screens) -->
+<div class="pshr" data-headroom-explorer
+     data-api="SERVICE_URL"
+     data-default="NWRK1W"></div>
+
+<script>
+/* jsDelivr lets browsers keep @main files for 7 days; a daily query string
+   means widget fixes reach readers within a day, without re-pasting this. */
+(function () {
+  var s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/gh/SashCommits/nem_live@main/headroom-widget.js?d=" + new Date().toISOString().slice(0, 10);
+  document.body.appendChild(s);
+})();
+</script>
