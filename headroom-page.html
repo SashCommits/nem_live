@@ -1,0 +1,14 @@
+<!-- PowerSocket NEM Headroom Explorer widget: paste into a Ghost HTML card. -->
+<div class="pshr" data-headroom-explorer
+     data-src="DATA_URL"
+     data-default="NWRK1W"></div>
+
+<script>
+/* jsDelivr lets browsers keep @main files for 7 days; a daily query string
+   means widget fixes reach readers within a day, without re-pasting this. */
+(function () {
+  var s = document.createElement("script");
+  s.src = "https://cdn.jsdelivr.net/gh/SashCommits/nem_live@main/headroom-widget.js?d=" + new Date().toISOString().slice(0, 10);
+  document.body.appendChild(s);
+})();
+</script>
