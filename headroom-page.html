@@ -1,6 +1,11 @@
-<!-- PowerSocket NEM Headroom Explorer widget: paste into a Ghost HTML card. -->
+<!-- PowerSocket NEM Headroom Explorer: paste into a Ghost HTML card on the
+     product's page. Subscribers only: the data comes from the private
+     headroom service, which checks each visitor is a paying member.
+     data-api   the service's address (the Vercel project for powersocket-grid-headroom)
+     data-signup / data-upgrade   optional: where "Subscribe" and "See plans" go
+                (default: Ghost Portal's sign-up and plans screens) -->
 <div class="pshr" data-headroom-explorer
-     data-src="DATA_URL"
+     data-api="SERVICE_URL"
      data-default="NWRK1W"></div>
 
 <script>

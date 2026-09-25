@@ -1,12 +1,16 @@
 // PowerSocket NEM Headroom Explorer widget, for the Ghost page.
 // Embed with (see headroom-page.html):
-//   <div class="pshr" data-src="<url of explorer.json>"></div>
+//   <div class="pshr" data-api="<service URL>"></div>
 //   <script src="https://cdn.jsdelivr.net/gh/OWNER/REPO@main/headroom-widget.js"></script>
 //
-// explorer.json is built monthly by the private powersocket-grid-headroom
-// pipeline (ingest/explorer_bundle.py): derived headroom and spill figures
-// for every NEM connection point with an invoked network constraint over
-// the latest 12 months. This file only draws it.
+// Subscribers only. The data lives in the private powersocket-grid-headroom
+// service, never in this repository or in a public file. The widget asks the
+// Ghost site it's embedded in for the signed-in member's identity token
+// (/members/api/session) and sends it with every request; the service checks
+// the member is a paying subscriber before answering. It loads the location
+// list for one project size at a time and each location's detail only when
+// it is opened. Subscribers can save locations with private notes, stored
+// encrypted by the service.
 //
 // Layout: NEM-wide figures, a searchable list of connection points, the
 // selected point's detail (spill curve, headroom range, monthly time at the
@@ -62,6 +66,7 @@
 .pshr .hr-wrap table.hr-t thead th{position:sticky;top:0;background:var(--hr-bg);z-index:1;text-align:left;font-weight:500;color:var(--hr-ink2);padding:.45rem .6rem;border-bottom:1px solid var(--hr-line);white-space:nowrap}
 .pshr thead th button{all:unset;cursor:pointer}
 .pshr thead th button:focus-visible{outline:2px solid var(--hr-accent)}
+.pshr .hr-list table.hr-t th:first-child{width:55%}
 .pshr .hr-wrap table.hr-t tbody td{padding:.4rem .6rem;border-bottom:1px solid var(--hr-line);vertical-align:top;color:var(--hr-ink)}
 .pshr .hr-row{cursor:pointer}
 .pshr .hr-row:hover{background:var(--hr-hover)}
@@ -104,6 +109,19 @@
 .pshr .hr-wrap ol.hr-steps{margin:0;padding-left:1.2rem;display:grid;gap:.5rem;font-size:.88rem}
 .pshr .hr-wrap ol.hr-steps li{margin:0;padding-left:.2rem}
 .pshr .hr-foot{font-size:.75rem;color:var(--hr-muted);max-width:90ch;line-height:1.5}
+.pshr .hr-gate{border:1px solid var(--hr-line);border-radius:10px;padding:1.5rem 1.25rem;display:grid;gap:.75rem;justify-items:start}
+.pshr .hr-gate p{color:var(--hr-ink2);font-size:.95rem;max-width:60ch}
+.pshr .hr-actions{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.pshr a.hr-btn,.pshr button.hr-btn{display:inline-block;font:inherit;font-size:.85rem;font-weight:500;line-height:1.3;text-decoration:none;cursor:pointer;border-radius:7px;padding:.45rem .9rem;margin:0;border:1px solid var(--hr-ink);background:var(--hr-ink);color:var(--hr-bg)}
+.pshr a.hr-btn.hr-quiet,.pshr button.hr-btn.hr-quiet{background:transparent;color:var(--hr-ink);border-color:var(--hr-line)}
+.pshr button.hr-btn[disabled]{opacity:.5;cursor:default}
+.pshr button.hr-link{all:unset;cursor:pointer;font-size:.75rem;color:var(--hr-ink2);text-decoration:underline;text-underline-offset:3px}
+.pshr button.hr-link:focus-visible{outline:2px solid var(--hr-accent)}
+.pshr .hr-star{color:var(--hr-warn);margin-right:4px}
+.pshr .hr-mine{display:grid;gap:.5rem;padding:.9rem;border-radius:8px;background:var(--hr-wash)}
+.pshr .hr-mine textarea{font:inherit;font-size:.88rem;color:var(--hr-ink);background:var(--hr-bg);border:1px solid var(--hr-line);border-radius:7px;padding:.5rem .6rem;width:100%;min-height:4.5rem;resize:vertical;margin:0}
+.pshr .hr-mine textarea:focus-visible{outline:2px solid var(--hr-accent);outline-offset:1px}
+.pshr .hr-msg{font-size:.78rem;color:var(--hr-muted)}
 .pshr .hr-status{padding:2rem 1rem;text-align:center;font-size:.9rem;color:var(--hr-ink2)}
 .pshr .hr-error{border:1px solid rgba(200,80,80,.5);border-radius:8px}
 @media (prefers-reduced-motion:no-preference){.pshr .hr-row,.pshr button.hr-chip,.pshr .hr-seg button{transition:background-color 120ms}}
@@ -220,11 +238,78 @@
       <p class="hr-note">To check a location against another source, compare it with AEMO's Enhanced Locational Information report, which ranks congestion at around 160 locations.</p>
     </section>
   </div>
+  <p class="hr-foot" data-hr="privacy">Locations you save and your notes are stored encrypted and only you can see them. <button type="button" class="hr-link" data-hr="wipe">Delete everything I've saved</button></p>
   <p class="hr-foot">Source: Australian Energy Market Operator (AEMO), market management system data (DISPATCHCONSTRAINT, DISPATCHLOAD, GENCONDATA, SPDCONNECTIONPOINTCONSTRAINT, DUDETAILSUMMARY, GENUNITS, STATION), <span data-hr="foot-period"></span>. Data processed by The Power Socket. Headroom is the extra injection a location could take before its tightest active network constraint binds, at AEMO's actual dispatch. A blank percentile means no network constraint was active in that share of intervals, which is not the same as unlimited.</p>
 </div>`;
 
+  var PORTAL = { signup: "#/portal/signup", signin: "#/portal/signin", plans: "#/portal/account/plans" };
+
+  // Talks to the service on behalf of the signed-in Ghost member.
+  function client(root) {
+    var ghost = (root.dataset.ghost || location.origin).replace(/\/$/, "");
+    var base = root.dataset.api.replace(/\/$/, "");
+    var tok = null;
+    function session(fresh) {
+      if (tok && !fresh) return Promise.resolve(tok);
+      return fetch(ghost + "/members/api/session", { credentials: "same-origin" })
+        .then(function (r) { return r.ok ? r.text() : ""; })
+        .then(function (t) { tok = (t || "").trim() || null; return tok; });
+    }
+    function fail(status, code, message) { var e = new Error(message); e.status = status; e.code = code; return e; }
+    function call(path, opts, retried) {
+      opts = opts || {};
+      return session(retried).then(function (t) {
+        if (!t) throw fail(401, "signed_out", "Please sign in.");
+        var headers = { Authorization: "Bearer " + t };
+        if (opts.body) headers["Content-Type"] = "application/json";
+        return fetch(base + path, { method: opts.method || "GET", headers: headers, body: opts.body, cache: "no-store" });
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (b) {
+          // Identity tokens are short-lived: fetch a fresh one once and retry.
+          if (r.status === 401 && !retried) return call(path, opts, true);
+          if (!r.ok) throw fail(r.status, b.error || "http", b.message || "Something went wrong (HTTP " + r.status + ").");
+          return b;
+        });
+      }, function (e) {
+        if (e.code) throw e;
+        throw fail(0, "network", "Couldn't reach the headroom service. Check your connection and try again.");
+      });
+    }
+    return {
+      list: function (size) { return call("/api/headroom?view=list&size=" + size); },
+      point: function (id) { return call("/api/headroom?view=point&id=" + encodeURIComponent(id)); },
+      load: function (name) { return call("/api/saved?name=" + name); },
+      save: function (name, value) { return call("/api/saved?name=" + name, { method: "PUT", body: JSON.stringify({ value: value }) }); },
+      wipe: function () { return call("/api/saved?all=1", { method: "DELETE" }); }
+    };
+  }
+
+  function gate(root, e) {
+    var link = function (href, label, quiet) { return '<a class="hr-btn' + (quiet ? " hr-quiet" : "") + '" href="' + esc(href) + '">' + label + "</a>"; };
+    var html;
+    if (e.code === "signed_out") {
+      html = "<h4>The Headroom Explorer is for subscribers</h4><p>See where the NEM has room for new solar, wind and storage: network headroom, spill for a new project and the constraint that limits every connection point.</p>" +
+        '<div class="hr-actions">' + link(root.dataset.signup || PORTAL.signup, "Subscribe") + link(PORTAL.signin, "Sign in", true) + "</div>";
+    } else if (e.code === "not_subscribed" || e.code === "wrong_tier") {
+      html = "<h4>Your plan doesn't include the Headroom Explorer</h4><p>" + esc(e.message) + '</p><div class="hr-actions">' + link(root.dataset.upgrade || PORTAL.plans, "See plans") + "</div>";
+    } else {
+      html = "<h4>The Headroom Explorer couldn't load</h4><p>" + esc(e.message) + '</p><div class="hr-actions"><button type="button" class="hr-btn hr-quiet" data-hr="retry">Try again</button></div>';
+    }
+    root.innerHTML = '<div class="hr-wrap"><div class="hr-gate">' + html + "</div></div>";
+    var retry = root.querySelector('[data-hr="retry"]');
+    if (retry) retry.addEventListener("click", function () { start(root); });
+  }
+
+  function start(root) {
+    var api = root._hrApi;
+    root.innerHTML = '<div class="hr-status">Loading the headroom explorer\u2026</div>';
+    Promise.all([api.list(300), api.load("locations")])
+      .then(function (r) { build(root, r[0], (r[1] && r[1].value) || {}, api, root._hrTheme); })
+      .catch(function (e) { gate(root, e); });
+  }
+
   function initWidget(root) {
-    if (!root.dataset.src || root.dataset.hrReady) return;
+    if (!root.dataset.api || root.dataset.hrReady) return;
     root.dataset.hrReady = "1";
     injectCss();
     root.classList.add("pshr");
@@ -236,17 +321,23 @@
       root.style.setProperty("--hr-bg", pageBackground(host));
     }
     applyTheme();
-    root.innerHTML = '<div class="hr-status">Loading the headroom explorer…</div>';
-
-    fetch(root.dataset.src, { cache: "no-cache" })
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (D) { build(root, D, applyTheme); })
-      .catch(function (e) {
-        root.innerHTML = '<div class="hr-status hr-error">The headroom explorer could not load its data (' + esc(e.message) + "). Please try again later.</div>";
-      });
+    // Follow the site's light/dark toggle (Ghost themes flip a class or data
+    // attribute on <html> or <body>); colours are CSS variables, so only the
+    // variables need re-reading.
+    var watcher = new MutationObserver(applyTheme);
+    [document.documentElement, document.body].forEach(function (n) {
+      if (n) watcher.observe(n, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
+    });
+    if (window.matchMedia) {
+      var mq = window.matchMedia("(prefers-color-scheme: dark)");
+      if (mq.addEventListener) mq.addEventListener("change", function () { setTimeout(applyTheme, 50); });
+    }
+    root._hrApi = client(root);
+    root._hrTheme = applyTheme;
+    start(root);
   }
 
-  function build(root, D, applyTheme) {
+  function build(root, D, saved, api) {
     root.innerHTML = SHELL;
     var uid = "hr" + Math.random().toString(36).slice(2, 8);
     var $ = function (k) { return root.querySelector('[data-hr="' + k + '"]'); };
@@ -254,12 +345,13 @@
     $("size").id = uid + "-size"; $("size-label").htmlFor = uid + "-size";
 
     var byId = new Map(D.points.map(function (p) { return [p.id, p]; }));
+    var details = new Map();
     var nameOf = function (p) { return p.names.length ? p.names.join(" / ") : p.id; };
 
     var per = D.period.split("..");
     $("period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]) + ", every five-minute interval.";
     $("foot-period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]);
-    $("f-points").textContent = D.points.length.toLocaleString();
+    $("f-points").textContent = D.count.toLocaleString();
     $("f-solar").textContent = D.fleet.solar.net.toFixed(1) + "%";
     $("f-wind").textContent = D.fleet.wind.net.toFixed(1) + "%";
     var atLim = D.validation.filter(function (v) { return v.headroom_band.indexOf("<1") === 0; });
@@ -281,12 +373,24 @@
     var sizeSel = $("size");
     sizeSel.innerHTML = D.sizes.map(function (s, i) { return '<option value="' + i + '">' + s + " MW</option>"; }).join("");
     sizeSel.value = String(state.sizeIdx);
-    sizeSel.addEventListener("change", function () { state.sizeIdx = +sizeSel.value; renderList(); renderDetail(); });
+    sizeSel.addEventListener("change", function () {
+      var idx = +sizeSel.value;
+      sizeSel.disabled = true;
+      api.list(D.sizes[idx]).then(function (L) {
+        D.points = L.points; byId = new Map(D.points.map(function (p) { return [p.id, p]; }));
+        state.sizeIdx = idx; renderList(); renderDetail();
+      }, function (e) { sizeSel.value = String(state.sizeIdx); showError(e); })
+        .then(function () { sizeSel.disabled = false; });
+    });
 
-    var regions = ["ALL", "NSW1", "QLD1", "VIC1", "SA1", "TAS1"];
-    $("regions").innerHTML = regions.map(function (r) {
-      return '<button type="button" class="hr-chip" data-r="' + r + '" aria-pressed="' + (r === "ALL") + '">' + (r === "ALL" ? "All regions" : REG[r]) + "</button>";
-    }).join("");
+    var regions = ["ALL", "NSW1", "QLD1", "VIC1", "SA1", "TAS1", "SAVED"];
+    function renderChips() {
+      $("regions").innerHTML = regions.map(function (r) {
+        var label = r === "ALL" ? "All regions" : r === "SAVED" ? "\u2605 Saved (" + Object.keys(saved).length + ")" : REG[r];
+        return '<button type="button" class="hr-chip" data-r="' + r + '" aria-pressed="' + (r === state.region) + '">' + label + "</button>";
+      }).join("");
+    }
+    renderChips();
     $("regions").addEventListener("click", function (e) {
       var b = e.target.closest("button"); if (!b) return;
       state.region = b.dataset.r;
@@ -302,15 +406,16 @@
       });
     });
 
-    var spillAt = function (p, tech) { return p.spill[tech] ? p.spill[tech].shared[state.sizeIdx] : null; };
+    // The list carries spill for the selected size only (p.solar, p.wind).
+    var spillAt = function (p, tech) { return p[tech]; };
     function renderList() {
       var pts = D.points.filter(function (p) {
-        return (state.region === "ALL" || p.region === state.region) &&
+        return (state.region === "ALL" || p.region === state.region || (state.region === "SAVED" && saved[p.id])) &&
           (!state.q || p.id.toLowerCase().indexOf(state.q) >= 0 || p.names.join(" ").toLowerCase().indexOf(state.q) >= 0 || p.duids.join(" ").toLowerCase().indexOf(state.q) >= 0);
       });
       var key = {
         name: function (p) { return nameOf(p).toLowerCase(); },
-        at: function (p) { return p.gen.at == null ? -1 : p.gen.at; },
+        at: function (p) { return p.at == null ? -1 : p.at; },
         solar: function (p) { var v = spillAt(p, "solar"); return v == null ? -1 : v; },
         wind: function (p) { var v = spillAt(p, "wind"); return v == null ? -1 : v; }
       }[state.sort];
@@ -318,8 +423,8 @@
       $("count").textContent = pts.length + " shown";
       $("rows").innerHTML = pts.map(function (p) {
         return '<tr class="hr-row" tabindex="0" data-id="' + esc(p.id) + '" aria-selected="' + (p.id === state.sel) + '">' +
-          '<td><div class="hr-n">' + esc(nameOf(p)) + '</div><div class="hr-c">' + esc(p.id) + " · " + (REG[p.region] || esc(p.region)) + "</div></td>" +
-          '<td class="hr-r hr-num">' + fmtPct(p.gen.at) + "</td>" +
+          '<td><div class="hr-n">' + (saved[p.id] ? '<span class="hr-star" aria-label="Saved">\u2605</span>' : "") + esc(nameOf(p)) + '</div><div class="hr-c">' + esc(p.id) + " · " + (REG[p.region] || esc(p.region)) + "</div></td>" +
+          '<td class="hr-r hr-num">' + fmtPct(p.at) + "</td>" +
           '<td class="hr-r hr-num">' + fmtPct(spillAt(p, "solar"), 0) + "</td>" +
           '<td class="hr-r hr-num">' + fmtPct(spillAt(p, "wind"), 0) + "</td></tr>";
       }).join("");
@@ -429,8 +534,19 @@
       box.innerHTML = g + '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + Y(0) + '" y2="' + Y(0) + '" stroke="var(--hr-axis)" stroke-width="1"/></svg>';
     }
 
+    function showError(e) {
+      $("detail").innerHTML = '<div class="hr-gate"><h4>' + (e.status === 429 ? "Taking a breather" : "Couldn't load this location") + "</h4><p>" + esc(e.message) + "</p></div>";
+    }
+
     function renderDetail() {
-      var p = byId.get(state.sel); if (!p) return;
+      var id = state.sel; if (!byId.has(id)) return;
+      var p = details.get(id);
+      if (!p) {
+        $("detail").innerHTML = '<div class="hr-status">Loading ' + esc(nameOf(byId.get(id))) + "\u2026</div>";
+        api.point(id).then(function (r) { details.set(id, r.point); if (state.sel === id) renderDetail(); },
+          function (e) { if (state.sel === id) showError(e); });
+        return;
+      }
       var st = status(p.gen.at || 0), size = D.sizes[state.sizeIdx];
       var spillStat = function (t, s) {
         return s ? '<div class="hr-stat"><span class="hr-l">New ' + size + " MW " + t + ' farm: output spilled</span><span class="hr-v hr-num">' + s.shared[state.sizeIdx].toFixed(1) +
@@ -448,6 +564,10 @@
         '<div class="hr-ids"><span class="hr-mono">' + esc(p.id) + "</span><span>" + (REG[p.region] || esc(p.region)) + "</span><span>" + esc(p.type.toLowerCase()) +
         '</span><span>units: <span class="hr-mono">' + esc(p.duids.join(", ")) + "</span></span></div>" +
         '<span class="hr-pill">' + statusIcon(st[0]) + st[1] + "</span></div>" +
+        '<div class="hr-mine"><div class="hr-bhead"><h5>Your notes</h5><button type="button" class="hr-btn' + (saved[p.id] ? " hr-quiet" : "") + '" data-hr="star" aria-pressed="' + !!saved[p.id] + '">' +
+        (saved[p.id] ? "\u2605 Saved" : "\u2606 Save location") + "</button></div>" +
+        '<textarea data-hr="note" maxlength="2000" placeholder="Private notes on this location \u2013 only you can see these">' + esc(saved[p.id] ? saved[p.id].note : "") + "</textarea>" +
+        '<div class="hr-actions"><button type="button" class="hr-btn hr-quiet" data-hr="save-note">Save note</button><span class="hr-msg" data-hr="note-msg" aria-live="polite"></span></div></div>' +
         '<div class="hr-stats">' +
         '<div class="hr-stat"><span class="hr-l">Time at the generation limit</span><span class="hr-v hr-num">' + fmtPct(p.gen.at) + '</span><span class="hr-f">of five-minute intervals</span></div>' +
         '<div class="hr-stat"><span class="hr-l">Median generation headroom</span><span class="hr-v hr-num">' + fmtMW(p.gen.q[2]) + '</span><span class="hr-f">P10 ' + fmtMW(p.gen.q[0]) + " · P90 " + fmtMW(p.gen.q[4]) + "</span></div>" +
@@ -471,10 +591,50 @@
       $("detail").querySelectorAll(".hr-seg button").forEach(function (b) {
         b.addEventListener("click", function () { state.tech = b.dataset.t; renderDetail(); });
       });
+      $("star").addEventListener("click", function () {
+        var next = Object.assign({}, saved);
+        if (next[p.id]) delete next[p.id]; else next[p.id] = { note: $("note").value.trim(), t: new Date().toISOString() };
+        persist(next, "star");
+      });
+      $("save-note").addEventListener("click", function () {
+        var next = Object.assign({}, saved), note = $("note").value.trim();
+        next[p.id] = { note: note, t: new Date().toISOString() };
+        persist(next, "note");
+      });
       spillChart(p, tech, $("c-spill"));
       rangeChart(p, $("c-range"));
       monthChart(p, $("c-month"));
     }
+
+    // Saved locations are one encrypted record per subscriber.
+    function persist(next, what) {
+      var msg = $("note-msg");
+      root.querySelectorAll('[data-hr="star"],[data-hr="save-note"]').forEach(function (b) { b.disabled = true; });
+      if (msg) msg.textContent = "Saving\u2026";
+      api.save("locations", next).then(function () {
+        saved = next; renderChips(); renderList(); renderDetail();
+        var m = $("note-msg"); if (m) m.textContent = what === "note" ? "Note saved." : saved[state.sel] ? "Location saved." : "Removed from saved.";
+      }, function (e) {
+        root.querySelectorAll('[data-hr="star"],[data-hr="save-note"]').forEach(function (b) { b.disabled = false; });
+        if (msg) msg.textContent = "Couldn't save: " + e.message;
+      });
+    }
+
+    // Delete everything, with the confirmation step on the page itself.
+    $("privacy").addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      if (b.dataset.hr === "wipe") {
+        $("privacy").innerHTML = "Delete all your saved locations and notes? This can't be undone. " +
+          '<button type="button" class="hr-link" data-hr="wipe-yes">Yes, delete everything</button> \u00b7 <button type="button" class="hr-link" data-hr="wipe-no">Cancel</button>';
+      } else if (b.dataset.hr === "wipe-yes") {
+        api.wipe().then(function () {
+          saved = {}; renderChips(); renderList(); renderDetail();
+          $("privacy").textContent = "Everything you'd saved has been deleted.";
+        }, function (err) { $("privacy").textContent = "Couldn't delete: " + err.message; });
+      } else if (b.dataset.hr === "wipe-no") {
+        $("privacy").innerHTML = "Locations you save and your notes are stored encrypted and only you can see them. <button type=\"button\" class=\"hr-link\" data-hr=\"wipe\">Delete everything I've saved</button>";
+      }
+    });
 
     // Redraw charts when the widget's own width changes (window resize, or the
     // theme changing its content column), not on every window resize.
@@ -486,21 +646,9 @@
       }).observe(root);
     }
 
-    // Follow the site's light/dark toggle (Ghost themes flip a class or data
-    // attribute on <html> or <body>); colours are CSS variables, so only the
-    // variables need re-reading.
-    var watcher = new MutationObserver(applyTheme);
-    [document.documentElement, document.body].forEach(function (n) {
-      if (n) watcher.observe(n, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
-    });
-    if (window.matchMedia) {
-      var mq = window.matchMedia("(prefers-color-scheme: dark)");
-      if (mq.addEventListener) mq.addEventListener("change", function () { setTimeout(applyTheme, 50); });
-    }
-
     var start = decodeURIComponent((location.hash || "").slice(1));
     var dflt = root.dataset.default;
-    state.sel = byId.has(start) ? start : byId.has(dflt) ? dflt : D.points.slice().sort(function (a, b) { return (b.gen.at || 0) - (a.gen.at || 0); })[0].id;
+    state.sel = byId.has(start) ? start : byId.has(dflt) ? dflt : D.points.slice().sort(function (a, b) { return (b.at || 0) - (a.at || 0); })[0].id;
     renderList(); renderDetail();
     var selRow = root.querySelector('.hr-row[aria-selected="true"]'), wrap = root.querySelector(".hr-tablewrap");
     if (selRow && wrap) wrap.scrollTop = Math.max(0, selRow.offsetTop - wrap.clientHeight / 2);
