@@ -62,7 +62,8 @@
 .pshr .hr-ctlrow{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:var(--hr-ink2)}
 .pshr .hr-ctlrow select{width:auto}
 .pshr .hr-tablewrap{overflow:auto;max-height:22rem;position:relative}
-.pshr .hr-map-wrap{height:22rem;border-radius:8px;overflow:hidden;position:relative;background:var(--hr-wash)}
+.pshr .hr-map-wrap{height:26rem;border-radius:8px;overflow:hidden;position:relative;background:var(--hr-wash)}
+@container (min-width:860px){.pshr .hr-map-wrap{height:36rem}}
 .pshr .hr-map-wrap .leaflet-container{background:var(--hr-wash);font:inherit}
 .pshr .hr-map-wrap .leaflet-control-attribution{font-size:.65rem;color:var(--hr-ink2)}
 .pshr .hr-pin{border-radius:50%;border:2px solid var(--hr-bg)}
@@ -399,7 +400,7 @@
     var byId = new Map(D.points.map(function (p) { return [p.id, p]; }));
     var details = new Map();
     var nameOf = function (p) { return p.names.length ? p.names.join(" / ") : p.id; };
-    var map = null, mapMarkers = new Map(), mapErr = false;
+    var map = null, mapMarkers = new Map(), mapErr = false, lastFit = null;
 
     var per = D.period.split("..");
     $("period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]) + ", every five-minute interval.";
@@ -496,16 +497,69 @@
       m.setStyle({ weight: sel ? 3 : 2, color: sel ? "var(--hr-accent)" : "var(--hr-bg)", radius: sel ? 8 : 6 });
       if (sel) m.bringToFront();
     }
+    // Many stations only resolve to their town, or to the same site under
+    // two names (a power station and its battery), so pins can sit on top of
+    // one another and only the top one would be clickable. Once zoomed in far
+    // enough to be choosing between individual sites, overlapping pins are
+    // pushed apart just far enough not to touch -- each stays as near its
+    // true position as the crowd allows. Below that zoom, clicking a crowded
+    // pin zooms in to it instead of picking whichever happens to be on top.
+    // Pins are ~14 px across, a selected one ~19 px: NEAR is where two start
+    // to overlap, SPACING leaves room for a selected pin beside a plain one.
+    var FAN_ZOOM = 7, NEAR = 16, SPACING = 19;
+    function crowded(id) {
+      var z = map.getZoom(), a = map.project(mapMarkers.get(id)._hrBase, z), hit = false;
+      mapMarkers.forEach(function (m, other) { if (other !== id && a.distanceTo(map.project(m._hrBase, z)) < NEAR) hit = true; });
+      return hit;
+    }
+    function placeMarkers() {
+      if (!map) return;
+      var z = map.getZoom();
+      if (z < FAN_ZOOM) { mapMarkers.forEach(function (m) { m.setLatLng(m._hrBase); }); return; }
+      var ids = []; mapMarkers.forEach(function (m, id) { ids.push(id); });
+      ids.sort(); // deterministic: the same pins always settle the same way
+      var P = ids.map(function (id) { var q = map.project(mapMarkers.get(id)._hrBase, z); return [q.x, q.y]; });
+      // Exact duplicates have no direction to separate along: start them on a
+      // small golden-angle spiral.
+      var dup = new Map();
+      P.forEach(function (p) {
+        var k = Math.round(p[0]) + "," + Math.round(p[1]), n = dup.get(k) || 0;
+        dup.set(k, n + 1);
+        if (n) { p[0] += 2 * n * Math.cos(n * 2.4); p[1] += 2 * n * Math.sin(n * 2.4); }
+      });
+      var cell = function (v) { return Math.floor(v / SPACING); };
+      for (var it = 0; it < 80; it++) {
+        var grid = new Map(), moved = false;
+        P.forEach(function (p, i) { var k = cell(p[0]) + "," + cell(p[1]); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(i); });
+        P.forEach(function (p, i) {
+          for (var gx = cell(p[0]) - 1; gx <= cell(p[0]) + 1; gx++) for (var gy = cell(p[1]) - 1; gy <= cell(p[1]) + 1; gy++) {
+            (grid.get(gx + "," + gy) || []).forEach(function (j) {
+              if (j <= i) return;
+              var q = P[j], vx = q[0] - p[0], vy = q[1] - p[1], d = Math.hypot(vx, vy);
+              if (d >= SPACING) return;
+              if (d < 1e-6) { vx = 1; vy = 0; d = 1; }
+              var push = (SPACING - d) / 2 + 0.01;
+              vx /= d; vy /= d;
+              p[0] -= vx * push; p[1] -= vy * push; q[0] += vx * push; q[1] += vy * push;
+              moved = true;
+            });
+          }
+        });
+        if (!moved) break;
+      }
+      ids.forEach(function (id, i) { mapMarkers.get(id).setLatLng(map.unproject(P[i], z)); });
+    }
     function renderMap(pts) {
       $("listview").hidden = true; $("mapview").hidden = false;
       if (mapErr) return;
       loadLeaflet().then(function (L) {
         if (!root.isConnected) return; // widget torn down while the library was loading
         if (!map) {
-          map = L.map($("map"), { scrollWheelZoom: false, worldCopyJump: true }).setView([-27, 134], 4);
+          map = L.map($("map"), { scrollWheelZoom: false, worldCopyJump: true, zoomSnap: 0.25, zoomDelta: 1 }).setView([-27, 134], 4);
           L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
             maxZoom: 18, attribution: "© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap</a> contributors"
           }).addTo(map);
+          map.on("zoomend", placeMarkers);
         }
         var withPos = pts.filter(function (p) { return p.lat != null && p.lon != null; });
         var seen = new Set(withPos.map(function (p) { return p.id; }));
@@ -514,19 +568,34 @@
           var m = mapMarkers.get(p.id);
           if (!m) {
             m = L.circleMarker([p.lat, p.lon], { radius: 6, weight: 2, color: "var(--hr-bg)", fillColor: markerColor(p), fillOpacity: 0.9 })
-              .addTo(map).on("click", function () { pick(p.id); });
+              .addTo(map).on("click", function () {
+                // A stack at country scale: zoom in to it rather than picking
+                // whichever of its pins happens to be on top.
+                if (map.getZoom() < FAN_ZOOM && crowded(p.id)) map.setView(m._hrBase, FAN_ZOOM + 1);
+                else pick(p.id);
+              });
             m.bindTooltip(esc(nameOf(p)));
             mapMarkers.set(p.id, m);
           } else {
             m.setStyle({ fillColor: markerColor(p) });
           }
+          m._hrBase = [p.lat, p.lon];
         });
+        placeMarkers();
         mapMarkers.forEach(function (m, id) { styleMarker(id); });
         var missing = pts.length - withPos.length;
-        $("mapnote").textContent = missing > 0
-          ? missing + " of " + pts.length + " shown locations aren't placed yet (no station address we could match to a map position); use the list to reach them. Positions are approximate, from AEMO's registered station address."
-          : "Positions are approximate, from AEMO's registered station address.";
-        setTimeout(function () { map.invalidateSize(); if (withPos.length) map.fitBounds(withPos.map(function (p) { return [p.lat, p.lon]; }), { padding: [20, 20], maxZoom: 9 }); }, 0);
+        $("mapnote").textContent = (missing > 0
+          ? missing + " of " + pts.length + " shown locations aren't placed yet (no station address we could match to a map position); use the list to reach them. "
+          : "") + "Positions are approximate: for many stations, the town in AEMO's registered address. Zoomed in, pins that would overlap are nudged apart.";
+        // Refit only when the set of pins changes (a filter), not on every
+        // redraw -- picking a pin redraws too, and mustn't undo the viewer's zoom.
+        var fitKey = withPos.map(function (p) { return p.id; }).join(",");
+        if (fitKey !== lastFit) {
+          lastFit = fitKey;
+          setTimeout(function () { map.invalidateSize(); if (withPos.length) map.fitBounds(withPos.map(function (p) { return [p.lat, p.lon]; }), { padding: [24, 24], maxZoom: 9 }); }, 0);
+        } else {
+          setTimeout(function () { map.invalidateSize(); }, 0);
+        }
       }, function (e) {
         mapErr = true;
         $("map").innerHTML = '<div class="hr-status">' + esc(e.message) + "</div>";
