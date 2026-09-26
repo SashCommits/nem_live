@@ -109,6 +109,11 @@
 .pshr .hr-wrap ol.hr-steps{margin:0;padding-left:1.2rem;display:grid;gap:.5rem;font-size:.88rem}
 .pshr .hr-wrap ol.hr-steps li{margin:0;padding-left:.2rem}
 .pshr .hr-foot{font-size:.75rem;color:var(--hr-muted);max-width:90ch;line-height:1.5}
+.pshr .hr-steps-scroll{overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
+.pshr .hr-steps-scroll .hr-seg button{white-space:nowrap}
+.pshr .hr-nav{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.82rem;color:var(--hr-ink2)}
+.pshr .hr-nav button{font:inherit;font-size:.82rem;background:transparent;color:var(--hr-ink);border:1px solid var(--hr-line);border-radius:7px;padding:2px 10px;cursor:pointer;margin:0}
+.pshr .hr-nav button[disabled]{opacity:.35;cursor:default}
 .pshr .hr-gate{border:1px solid var(--hr-line);border-radius:10px;padding:1.5rem 1.25rem;display:grid;gap:.75rem;justify-items:start}
 .pshr .hr-gate p{color:var(--hr-ink2);font-size:.95rem;max-width:60ch}
 .pshr .hr-actions{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
@@ -128,6 +133,7 @@
 `;
 
   var REG = { NSW1: "NSW", QLD1: "QLD", VIC1: "VIC", SA1: "SA", TAS1: "TAS" };
+  var STEPS = [["5m", "5 min"], ["30m", "30 min"], ["1h", "Hour"], ["1d", "Day"], ["7d", "Week"], ["1mo", "Month"], ["3mo", "Quarter"], ["1y", "Year"]];
 
   function injectCss() {
     if (document.getElementById("pshr-css")) return;
@@ -190,8 +196,8 @@
   <p class="hr-lede"><span data-hr="period"></span> Source: AEMO dispatch data. Headroom and spill are The Power Socket's calculations.</p>
   <section class="hr-fleet" aria-label="Across the NEM">
     <div><span class="hr-v hr-num" data-hr="f-points"></span><span class="hr-l">connection points where a network constraint was active</span></div>
-    <div><span class="hr-v hr-num" data-hr="f-solar"></span><span class="hr-l">of existing solar farms' output lost to network limits</span></div>
-    <div><span class="hr-v hr-num" data-hr="f-wind"></span><span class="hr-l">of existing wind farms' output lost to network limits</span></div>
+    <div><span class="hr-v hr-num" data-hr="f-solar"></span><span class="hr-l">of existing solar farms' output held back by network or security limits</span></div>
+    <div><span class="hr-v hr-num" data-hr="f-wind"></span><span class="hr-l">of existing wind farms' output held back by network or security limits</span></div>
     <div><span class="hr-v hr-num" data-hr="f-val"></span><span class="hr-l">of the time AEMO held a farm back where we compute zero headroom</span></div>
   </section>
   <div class="hr-main">
@@ -230,7 +236,7 @@
     <section class="hr-panel">
       <h4>How it's calculated</h4>
       <ol class="hr-steps">
-        <li><strong>Every five minutes</strong>, AEMO dispatches the market subject to network constraints: equations that keep each line and transformer within its limit if something else trips. It publishes how close each one came to its limit and how strongly each connection point pushes on it.</li>
+        <li><strong>Every five minutes</strong>, AEMO dispatches the market subject to network constraints: equations that keep each line and transformer within its limit, and the system stable, if something else trips. It publishes how close each one came to its limit and how strongly each connection point pushes on it.</li>
         <li><strong>Headroom</strong> is the extra megawatts a connection point could have injected before its tightest active constraint reached its limit, at AEMO's actual dispatch. We compute it for every interval in the year.</li>
         <li><strong>Spill</strong> adds a new solar or wind farm of the chosen size, running on the output pattern of existing farms nearby, and counts the energy that would not fit. Two rules for sharing room with farms already there give the central and pessimistic cases.</li>
         <li><strong>Existing farms</strong> shows what AEMO actually held back from the farms already at that connection point, with no modelling.</li>
@@ -280,7 +286,10 @@
       point: function (id) { return call("/api/headroom?view=point&id=" + encodeURIComponent(id)); },
       load: function (name) { return call("/api/saved?name=" + name); },
       save: function (name, value) { return call("/api/saved?name=" + name, { method: "PUT", body: JSON.stringify({ value: value }) }); },
-      wipe: function () { return call("/api/saved?all=1", { method: "DELETE" }); }
+      wipe: function () { return call("/api/saved?all=1", { method: "DELETE" }); },
+      series: function (id, step, end) {
+        return call("/api/headroom?view=series&id=" + encodeURIComponent(id) + "&step=" + step + (end ? "&end=" + end : ""));
+      }
     };
   }
 
@@ -352,8 +361,10 @@
     $("period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]) + ", every five-minute interval.";
     $("foot-period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]);
     $("f-points").textContent = D.count.toLocaleString();
-    $("f-solar").textContent = D.fleet.solar.net.toFixed(1) + "%";
-    $("f-wind").textContent = D.fleet.wind.net.toFixed(1) + "%";
+    // Network limits plus caps on particular farms: AEMO's "network curtailment".
+    var lim = function (f) { return (f.limits != null ? f.limits : f.net).toFixed(1) + "%"; };
+    $("f-solar").textContent = lim(D.fleet.solar);
+    $("f-wind").textContent = lim(D.fleet.wind);
     var atLim = D.validation.filter(function (v) { return v.headroom_band.indexOf("<1") === 0; });
     var capped = atLim.reduce(function (a, v) { return a + v.capped; }, 0);
     var total = atLim.reduce(function (a, v) { return a + v.unit_intervals; }, 0);
@@ -369,7 +380,7 @@
         return '<tr><td>' + bands[b] + '</td><td class="hr-r hr-num">' + cell("solar") + '</td><td class="hr-r hr-num">' + cell("wind") + "</td></tr>";
       }).join("") + "</tbody></table>";
 
-    var state = { q: "", region: "ALL", sizeIdx: Math.max(0, D.sizes.indexOf(300)), sort: "at", dir: -1, sel: null, tech: "solar" };
+    var state = { q: "", region: "ALL", sizeIdx: Math.max(0, D.sizes.indexOf(300)), sort: "at", dir: -1, sel: null, tech: "solar", step: "1d", end: null };
     var sizeSel = $("size");
     sizeSel.innerHTML = D.sizes.map(function (s, i) { return '<option value="' + i + '">' + s + " MW</option>"; }).join("");
     sizeSel.value = String(state.sizeIdx);
@@ -431,7 +442,7 @@
     }
     function pick(id) {
       if (!byId.has(id)) return;
-      state.sel = id; renderList(); renderDetail();
+      state.sel = id; state.end = null; renderList(); renderDetail();
       // Single column (phones, narrow themes): the detail sits below the list.
       var det = $("detail"), list = root.querySelector(".hr-list");
       if (det.offsetTop > list.offsetTop + list.offsetHeight - 2 && det.getBoundingClientRect().top > window.innerHeight * 0.6) {
@@ -538,6 +549,115 @@
       $("detail").innerHTML = '<div class="hr-gate"><h4>' + (e.status === 429 ? "Taking a breather" : "Couldn't load this location") + "</h4><p>" + esc(e.message) + "</p></div>";
     }
 
+    var tsCache = {};
+    function loadSeries(id) {
+      var key = id + "|" + state.step + "|" + (state.end || ""), box = $("c-ts");
+      if (!box) return;
+      var draw = function (r) { if (state.sel === id && $("c-ts")) { tsNav(r); tsChart(r, $("c-ts")); } };
+      if (tsCache[key]) { draw(tsCache[key]); return; }
+      box.innerHTML = '<div class="hr-status">Loading\u2026</div>';
+      api.series(id, state.step, state.end).then(function (r) { tsCache[key] = r; draw(r); }, function (e) {
+        if (state.sel !== id || !$("c-ts")) return;
+        $("ts-nav").innerHTML = "";
+        box.innerHTML = '<p class="hr-note">' + (e.status === 404 ? "No headroom history has been published for this location yet." : esc(e.message)) + "</p>";
+      });
+    }
+
+    function shiftDate(iso, days) { var d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); }
+    function fmtDay(iso) { return new Date(iso + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }); }
+
+    function tsNav(r) {
+      var nav = $("ts-nav"), win = { "5m": 1, "30m": 7, "1h": 31, "1d": 365 }[r.step];
+      if (!win) { nav.innerHTML = '<span>' + fmtDay(r.start) + " to " + fmtDay(r.end) + "</span>"; return; }
+      nav.innerHTML = '<button type="button" data-d="-1" aria-label="Earlier"' + (r.start <= r.first ? " disabled" : "") + '>\u2039 Earlier</button><span>' +
+        (win === 1 ? fmtDay(r.start) : fmtDay(r.start) + " to " + fmtDay(r.end)) + '</span><button type="button" data-d="1" aria-label="Later"' + (r.end >= r.last ? " disabled" : "") + '>Later \u203a</button>' +
+        '<button type="button" data-d="0"' + (r.end >= r.last ? " disabled" : "") + ">Latest</button>";
+      nav.querySelectorAll("button").forEach(function (b) {
+        b.addEventListener("click", function () {
+          var d = +b.dataset.d;
+          state.end = d === 0 ? null : shiftDate(r.end, d * win);
+          loadSeries(r.id);
+        });
+      });
+    }
+
+    function tsChart(r, box) {
+      var W = Math.max(300, box.clientWidth || 600), H = 260, m = { l: 48, r: 12, t: 22, b: 30 };
+      var n = r.t.length, fine = r.step === "5m" || r.step === "30m" || r.step === "1h";
+      var vals = [];
+      r.total.concat(r.available).forEach(function (x) { if (x) vals.push(x[1], x[2]); });
+      if (!vals.length) { box.innerHTML = '<p class="hr-note">No network limit applied here in this period.</p>'; return; }
+      var lo = Math.min(0, Math.min.apply(null, vals)), hi = Math.max.apply(null, vals);
+      var span = (hi - lo) || 10, stepV = Math.pow(10, Math.floor(Math.log10(span / 4))), f = span / 4 / stepV;
+      stepV *= f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10;
+      var y0 = Math.floor(lo / stepV) * stepV, y1 = Math.ceil(hi / stepV) * stepV;
+      var X = function (i) { return m.l + (n === 1 ? (W - m.l - m.r) / 2 : i / (n - 1) * (W - m.l - m.r)); };
+      var Y = function (v) { return m.t + (1 - (v - y0) / (y1 - y0)) * (H - m.t - m.b); };
+      var g = svgOpen(W, H);
+      for (var v = y0; v <= y1 + 1e-9; v += stepV) {
+        g += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + Y(v) + '" y2="' + Y(v) + '" stroke="' + (v === 0 ? "var(--hr-axis)" : "var(--hr-grid)") + '" stroke-width="1"/>';
+        g += '<text x="' + (m.l - 6) + '" y="' + (Y(v) + 4) + '" text-anchor="end">' + Math.round(v).toLocaleString() + "</text>";
+      }
+      g += '<text x="' + m.l + '" y="10" text-anchor="start">MW</text>';
+      var label = function (i) {
+        var s = r.t[i];
+        if (r.step === "5m" || r.step === "30m") return s.slice(11, 16);
+        if (r.step === "1h") return new Date(s.slice(0, 10) + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+        if (r.step === "1y") return s.slice(0, 4);
+        if (r.step === "3mo") return "Q" + (Math.floor((+s.slice(5, 7) - 1) / 3) + 1) + " " + s.slice(2, 4);
+        if (r.step === "1mo" || r.step === "7d") return new Date(s + "T00:00:00").toLocaleDateString("en-AU", { month: "short", year: "2-digit" });
+        return new Date(s + "T00:00:00").toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+      };
+      var nt = Math.max(2, Math.min(7, Math.floor((W - m.l - m.r) / 80)));
+      for (var k = 0; k < nt; k++) {
+        var i = Math.round(k / (nt - 1) * (n - 1));
+        g += '<text x="' + X(i) + '" y="' + (H - m.b + 18) + '" text-anchor="' + (k === 0 ? "start" : k === nt - 1 ? "end" : "middle") + '">' + label(i) + "</text>";
+      }
+      // min-max bands, then average lines; nulls break both
+      var band = function (arr, color) {
+        var out = "", seg = [];
+        var flush = function () {
+          if (seg.length > 1) out += '<path d="M' + seg.map(function (q) { return X(q[0]).toFixed(1) + "," + Y(q[2]).toFixed(1); }).join("L") + "L" +
+            seg.slice().reverse().map(function (q) { return X(q[0]).toFixed(1) + "," + Y(q[1]).toFixed(1); }).join("L") + 'Z" fill="' + color + '" fill-opacity=".16"/>';
+          seg = [];
+        };
+        arr.forEach(function (x, i) { if (x) seg.push([i, x[1], x[2]]); else flush(); }); flush();
+        return out;
+      };
+      var line = function (arr, color) {
+        var d = "", pen = false;
+        arr.forEach(function (x, i) { if (!x) { pen = false; return; } d += (pen ? "L" : "M") + X(i).toFixed(1) + "," + Y(x[0]).toFixed(1); pen = true; });
+        return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-linejoin="round"/>';
+      };
+      if (r.step !== "5m") g += band(r.total, "var(--hr-s2)") + band(r.available, "var(--hr-s1)");
+      g += line(r.total, "var(--hr-s2)") + line(r.available, "var(--hr-s1)");
+      g += '<line class="hr-xh" x1="0" x2="0" y1="' + m.t + '" y2="' + (H - m.b) + '" stroke="var(--hr-axis)" visibility="hidden"/>';
+      g += '<rect x="' + m.l + '" y="' + m.t + '" width="' + (W - m.l - m.r) + '" height="' + (H - m.t - m.b) + '" fill="transparent"/></svg><div class="hr-tip" hidden></div>';
+      box.innerHTML = g;
+      var sv = box.querySelector("svg"), tip = box.querySelector(".hr-tip"), xh = box.querySelector(".hr-xh");
+      var when = function (i) {
+        var s = r.t[i];
+        if (fine) return new Date(s + ":00").toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) + " (" + (r.step === "5m" ? "5 min" : r.step === "30m" ? "30 min" : "hour") + " ending)";
+        if (r.step === "1y") return s.slice(0, 4);
+        if (r.step === "3mo") return label(i).replace(" ", " 20");
+        if (r.step === "1mo") return new Date(s + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" });
+        if (r.step === "7d") return "Week from " + fmtDay(s);
+        return fmtDay(s);
+      };
+      var fmt = function (x) { return x ? Math.round(x[0]).toLocaleString() + " MW" + (r.step === "5m" ? "" : " (" + x[1].toLocaleString() + "\u2013" + x[2].toLocaleString() + ")") : "no limit applied"; };
+      sv.addEventListener("pointermove", function (ev) {
+        var rc = sv.getBoundingClientRect(), px = (ev.clientX - rc.left) * W / rc.width;
+        var i = Math.max(0, Math.min(n - 1, Math.round((px - m.l) / (W - m.l - m.r) * (n - 1))));
+        xh.setAttribute("x1", X(i)); xh.setAttribute("x2", X(i)); xh.setAttribute("visibility", "visible");
+        tip.innerHTML = "<strong>" + when(i) + "</strong><br>Total " + fmt(r.total[i]) + "<br>Available " + fmt(r.available[i]);
+        tip.hidden = false;
+        var bx = box.getBoundingClientRect(), tx = X(i) * rc.width / W;
+        tip.style.left = Math.min(Math.max(0, tx + 12), bx.width - tip.offsetWidth) + "px";
+        tip.style.top = "4px";
+      });
+      sv.addEventListener("pointerleave", function () { tip.hidden = true; xh.setAttribute("visibility", "hidden"); });
+    }
+
     function renderDetail() {
       var id = state.sel; if (!byId.has(id)) return;
       var p = details.get(id);
@@ -552,7 +672,11 @@
         return s ? '<div class="hr-stat"><span class="hr-l">New ' + size + " MW " + t + ' farm: output spilled</span><span class="hr-v hr-num">' + s.shared[state.sizeIdx].toFixed(1) +
           '%</span><span class="hr-f">sharing with existing farms; ' + s.behind[state.sizeIdx].toFixed(1) + "% if behind them · " + (s.src === "local" ? "local" : "regional") + " output pattern</span></div>" : "";
       };
-      var obsText = ["solar", "wind"].filter(function (t) { return p.obs[t]; }).map(function (t) { return t + " " + p.obs[t].net.toFixed(1) + "%"; }).join(", ");
+      var obsText = ["solar", "wind"].filter(function (t) { return p.obs[t]; }).map(function (t) {
+        var o = p.obs[t];
+        return t + " " + o.net.toFixed(1) + "%" + (o.farm >= 0.05 ? ' <span style="font-size:.8rem;font-weight:400">+ ' + o.farm.toFixed(1) + "% farm caps</span>" : "");
+      }).join(", ");
+      var anyFarm = ["solar", "wind"].some(function (t) { return p.obs[t] && p.obs[t].farm >= 0.05; });
       var con = function (title, c, dir) {
         return c ? '<div class="hr-con"><div class="hr-h"><strong>' + title + '</strong><span class="hr-mono">' + esc(c.id) + "</span><span>at the limit in " + c.n.toLocaleString() + ' intervals</span></div><div class="hr-d">' +
           (esc(c.d) || '<span class="hr-muted">No description published</span>') + "</div></div>"
@@ -572,7 +696,7 @@
         '<div class="hr-stat"><span class="hr-l">Time at the generation limit</span><span class="hr-v hr-num">' + fmtPct(p.gen.at) + '</span><span class="hr-f">of five-minute intervals</span></div>' +
         '<div class="hr-stat"><span class="hr-l">Median generation headroom</span><span class="hr-v hr-num">' + fmtMW(p.gen.q[2]) + '</span><span class="hr-f">P10 ' + fmtMW(p.gen.q[0]) + " · P90 " + fmtMW(p.gen.q[4]) + "</span></div>" +
         spillStat("solar", p.spill.solar) + spillStat("wind", p.spill.wind) +
-        (obsText ? '<div class="hr-stat"><span class="hr-l">Existing farms here lost to network limits</span><span class="hr-v hr-num" style="font-size:1.1rem">' + obsText + '</span><span class="hr-f">observed, not modelled</span></div>' : "") +
+        (obsText ? '<div class="hr-stat"><span class="hr-l">Existing farms here lost to network limits</span><span class="hr-v hr-num" style="font-size:1.1rem">' + obsText + '</span><span class="hr-f">observed, not modelled' + (anyFarm ? "; farm caps are limits AEMO placed on those particular farms, which a new project wouldn't inherit" : "") + '</span></div>' : "") +
         "</div>" +
         '<div class="hr-block"><div class="hr-bhead"><h5>Spill for a new project</h5>' +
         '<div class="hr-seg" role="group" aria-label="Technology"><button type="button" data-t="solar" aria-pressed="' + (tech === "solar") + '">Solar</button><button type="button" data-t="wind" aria-pressed="' + (tech === "wind") + '">Wind</button></div></div>' +
@@ -585,6 +709,15 @@
           D.sizes.map(function (z, i) { return '<tr><td class="hr-num">' + z + ' MW</td><td class="hr-r hr-num">' + s.shared[i].toFixed(1) + '%</td><td class="hr-r hr-num">' + s.behind[i].toFixed(1) + "%</td></tr>"; }).join("") + "</tbody></table>" : "") +
         "</div></details></div>" +
         '<div class="hr-block"><div class="hr-bhead"><h5>Headroom range, P10 to P90</h5><span class="hr-note">box P25 to P75, tick at the median</span></div><div class="hr-chart" data-hr="c-range"></div></div>' +
+        '<div class="hr-block"><div class="hr-bhead"><h5>Headroom over time</h5></div>' +
+        '<div class="hr-steps-scroll"><div class="hr-seg" role="group" aria-label="Time step" data-hr="steps">' +
+        STEPS.map(function (s) { return '<button type="button" data-s="' + s[0] + '" aria-pressed="' + (state.step === s[0]) + '">' + s[1] + "</button>"; }).join("") + "</div></div>" +
+        '<div class="hr-nav" data-hr="ts-nav"></div>' +
+        '<div class="hr-legend"><span><svg width="18" height="4" aria-hidden="true"><rect width="18" height="3" y="0.5" rx="1.5" fill="var(--hr-s2)"/></svg>Total headroom (the ceiling)</span>' +
+        '<span><svg width="18" height="4" aria-hidden="true"><rect width="18" height="3" y="0.5" rx="1.5" fill="var(--hr-s1)"/></svg>Available headroom (spare room)</span>' +
+        '<span><svg width="14" height="10" aria-hidden="true"><rect width="14" height="10" rx="2" fill="var(--hr-s1)" fill-opacity=".18"/></svg>Shading: lowest to highest in each step</span></div>' +
+        '<div class="hr-chart" data-hr="c-ts"></div>' +
+        '<p class="hr-note">Total is the most the network could have taken from this connection point: what the farms here were sending out, plus the spare room. Available is that spare room. Each point is the average over the step. Gaps are times when no network limit applied here.</p></div>' +
         '<div class="hr-block"><div class="hr-bhead"><h5>Time at the generation limit, by month</h5></div><div class="hr-chart" data-hr="c-month"></div></div>' +
         '<div class="hr-block"><h5>What limits this location</h5><div class="hr-cons">' + con("Generation", p.topGen, "generation") + con("Load", p.topLoad, "load") + "</div>" +
         '<p class="hr-note">AEMO\'s own description of the constraint most often at its limit for this connection point. "O/L" means overload; "on trip of" names the outage the limit protects against.</p></div>';
@@ -604,6 +737,13 @@
       spillChart(p, tech, $("c-spill"));
       rangeChart(p, $("c-range"));
       monthChart(p, $("c-month"));
+      $("steps").addEventListener("click", function (e) {
+        var b = e.target.closest("button"); if (!b) return;
+        state.step = b.dataset.s;
+        $("steps").querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", String(x === b)); });
+        loadSeries(p.id);
+      });
+      loadSeries(p.id);
     }
 
     // Saved locations are one encrypted record per subscriber.
