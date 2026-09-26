@@ -9,14 +9,14 @@
 // Ghost site it's embedded in for the signed-in member's identity token
 // (/members/api/session) and sends it with every request; the service checks
 // the member is a paying subscriber before answering. It loads the location
-// list for one project size at a time and each location's detail only when
+// list once and each location's detail only when
 // it is opened. Subscribers can save locations with private notes, stored
 // encrypted by the service.
 //
 // Layout: NEM-wide figures, a searchable list of connection points (or a
 // map of them, coloured by how often each is at its limit -- Leaflet loads
 // lazily from cdnjs the first time a viewer opens it), the selected point's
-// detail (spill curve, headroom range, headroom over time, the constraint
+// detail (spare headroom, headroom range, headroom over time, the constraint
 // that limits it), then how far to trust the numbers and how they are
 // calculated. Styles are injected here rather than in the page snippet, so
 // layout changes don't need a re-paste in Ghost. The widget sizes itself to
@@ -224,7 +224,7 @@
 
   var SHELL = `
 <div class="hr-wrap">
-  <p class="hr-lede"><span data-hr="period"></span> Source: AEMO dispatch data. Headroom and spill are The Power Socket's calculations.</p>
+  <p class="hr-lede"><span data-hr="period"></span> Source: AEMO dispatch data. Headroom figures are The Power Socket's calculations.</p>
   <section class="hr-fleet" aria-label="Across the NEM">
     <div><span class="hr-v hr-num" data-hr="f-points"></span><span class="hr-l">connection points where a network constraint was active</span></div>
     <div><span class="hr-v hr-num" data-hr="f-solar"></span><span class="hr-l">of existing solar farms' output held back by network or security limits</span></div>
@@ -238,8 +238,6 @@
         <input data-hr="q" type="search" placeholder="e.g. White Rock, Bayswater, NWGJ1J" autocomplete="off">
         <div class="hr-chips" data-hr="regions" role="group" aria-label="Region"></div>
         <div class="hr-ctlrow">
-          <label data-hr="size-label">New project size</label>
-          <select data-hr="size"></select>
           <span data-hr="count" class="hr-muted"></span>
           <div class="hr-seg" role="group" aria-label="View" data-hr="view" style="margin-left:auto">
             <button type="button" data-v="list" aria-pressed="true">List</button>
@@ -251,12 +249,13 @@
         <table class="hr-t">
           <thead><tr>
             <th><button data-sort="name">Location</button></th>
+            <th class="hr-r"><button data-sort="p10">Spare 90%</button></th>
+            <th class="hr-r"><button data-sort="p50">Spare median</button></th>
             <th class="hr-r"><button data-sort="at">At limit</button></th>
-            <th class="hr-r"><button data-sort="solar">Solar spill</button></th>
-            <th class="hr-r"><button data-sort="wind">Wind spill</button></th>
           </tr></thead>
           <tbody data-hr="rows"></tbody>
         </table>
+        <p class="hr-mapnote">Spare generation headroom in MW: what was available at least 90% of the time, and half the time. "No limit" means no network constraint applied that often.</p>
       </div>
       <div data-hr="mapview" hidden>
         <div class="hr-maplegend">
@@ -276,14 +275,12 @@
       <h4>How far to trust these numbers</h4>
       <p class="hr-note">AEMO flags every five minutes when it holds a solar or wind farm below what it could produce. That flag comes from a different AEMO table than our headroom calculation, so it is an independent check. Where we compute zero headroom at a farm's connection point, AEMO held the farm back almost every time.</p>
       <div class="hr-dt" data-hr="valtable"></div>
-      <p class="hr-note">Spill for a new project is modelled, not observed. The sharing figure is the central estimate: for a 50 MW project it lands within a median 0.9 percentage points of what existing farms at the same points actually lost. The behind-existing-farms figure is the pessimistic case. AEMO tends to cut the farms with the largest effect on a congested line first, so sharing understates spill at those points and overstates it at the others.</p>
     </section>
     <section class="hr-panel">
       <h4>How it's calculated</h4>
       <ol class="hr-steps">
         <li><strong>Every five minutes</strong>, AEMO dispatches the market subject to network constraints: equations that keep each line and transformer within its limit, and the system stable, if something else trips. It publishes how close each one came to its limit and how strongly each connection point pushes on it.</li>
         <li><strong>Headroom</strong> is the extra megawatts a connection point could have injected before its tightest active constraint reached its limit, at AEMO's actual dispatch. We compute it for every interval in the year.</li>
-        <li><strong>Spill</strong> adds a new solar or wind farm of the chosen size, running on the output pattern of existing farms nearby, and counts the energy that would not fit. Two rules for sharing room with farms already there give the central and pessimistic cases.</li>
         <li><strong>Existing farms</strong> shows what AEMO actually held back from the farms already at that connection point, with no modelling.</li>
       </ol>
       <p class="hr-note">To check a location against another source, compare it with AEMO's Enhanced Locational Information report, which ranks congestion at around 160 locations.</p>
@@ -327,7 +324,7 @@
       });
     }
     return {
-      list: function (size) { return call("/api/headroom?view=list&size=" + size); },
+      list: function () { return call("/api/headroom?view=list"); },
       point: function (id) { return call("/api/headroom?view=point&id=" + encodeURIComponent(id)); },
       load: function (name) { return call("/api/saved?name=" + name); },
       save: function (name, value) { return call("/api/saved?name=" + name, { method: "PUT", body: JSON.stringify({ value: value }) }); },
@@ -342,7 +339,7 @@
     var link = function (href, label, quiet) { return '<a class="hr-btn' + (quiet ? " hr-quiet" : "") + '" href="' + esc(href) + '">' + label + "</a>"; };
     var html;
     if (e.code === "signed_out") {
-      html = "<h4>The Headroom Explorer is for subscribers</h4><p>See where the NEM has room for new solar, wind and storage: network headroom, spill for a new project and the constraint that limits every connection point.</p>" +
+      html = "<h4>The Headroom Explorer is for subscribers</h4><p>See how much spare network room every NEM connection point has: available and total headroom over time, how often each is at its limit, and the constraint that limits it.</p>" +
         '<div class="hr-actions">' + link(root.dataset.signup || PORTAL.signup, "Subscribe") + link(PORTAL.signin, "Sign in", true) + "</div>";
     } else if (e.code === "not_subscribed" || e.code === "wrong_tier") {
       html = "<h4>Your plan doesn't include the Headroom Explorer</h4><p>" + esc(e.message) + '</p><div class="hr-actions">' + link(root.dataset.upgrade || PORTAL.plans, "See plans") + "</div>";
@@ -357,7 +354,7 @@
   function start(root) {
     var api = root._hrApi;
     root.innerHTML = '<div class="hr-status">Loading the headroom explorer\u2026</div>';
-    Promise.all([api.list(300), api.load("locations")])
+    Promise.all([api.list(), api.load("locations")])
       .then(function (r) { build(root, r[0], (r[1] && r[1].value) || {}, api, root._hrTheme); })
       .catch(function (e) { gate(root, e); });
   }
@@ -396,7 +393,6 @@
     var uid = "hr" + Math.random().toString(36).slice(2, 8);
     var $ = function (k) { return root.querySelector('[data-hr="' + k + '"]'); };
     $("q").id = uid + "-q"; $("q-label").htmlFor = uid + "-q";
-    $("size").id = uid + "-size"; $("size-label").htmlFor = uid + "-size";
 
     var byId = new Map(D.points.map(function (p) { return [p.id, p]; }));
     var details = new Map();
@@ -426,19 +422,7 @@
         return '<tr><td>' + bands[b] + '</td><td class="hr-r hr-num">' + cell("solar") + '</td><td class="hr-r hr-num">' + cell("wind") + "</td></tr>";
       }).join("") + "</tbody></table>";
 
-    var state = { q: "", region: "ALL", sizeIdx: Math.max(0, D.sizes.indexOf(300)), sort: "at", dir: -1, sel: null, tech: "solar", step: "1d", end: null, view: "list" };
-    var sizeSel = $("size");
-    sizeSel.innerHTML = D.sizes.map(function (s, i) { return '<option value="' + i + '">' + s + " MW</option>"; }).join("");
-    sizeSel.value = String(state.sizeIdx);
-    sizeSel.addEventListener("change", function () {
-      var idx = +sizeSel.value;
-      sizeSel.disabled = true;
-      api.list(D.sizes[idx]).then(function (L) {
-        D.points = L.points; byId = new Map(D.points.map(function (p) { return [p.id, p]; }));
-        state.sizeIdx = idx; renderList(); renderDetail();
-      }, function (e) { sizeSel.value = String(state.sizeIdx); showError(e); })
-        .then(function () { sizeSel.disabled = false; });
-    });
+    var state = { q: "", region: "ALL", sort: "p50", dir: -1, sel: null, step: "1d", end: null, view: "list" };
 
     var regions = ["ALL", "NSW1", "QLD1", "VIC1", "SA1", "TAS1", "SAVED"];
     function renderChips() {
@@ -463,8 +447,10 @@
       });
     });
 
-    // The list carries spill for the selected size only (p.solar, p.wind).
-    var spillAt = function (p, tech) { return p[tech]; };
+    // Spare headroom: a blank percentile means no network constraint applied
+    // that often -- the most room, not none -- so it sorts above any figure.
+    var spare = function (v) { return v == null ? Infinity : v; };
+    var fmtSpare = function (v) { return v == null ? "No limit" : Math.round(v).toLocaleString(); };
     function filteredPoints() {
       return D.points.filter(function (p) {
         return (state.region === "ALL" || p.region === state.region || (state.region === "SAVED" && saved[p.id])) &&
@@ -479,16 +465,22 @@
       var key = {
         name: function (p) { return nameOf(p).toLowerCase(); },
         at: function (p) { return p.at == null ? -1 : p.at; },
-        solar: function (p) { var v = spillAt(p, "solar"); return v == null ? -1 : v; },
-        wind: function (p) { var v = spillAt(p, "wind"); return v == null ? -1 : v; }
+        p10: function (p) { return spare(p.p10); },
+        p50: function (p) { return spare(p.p50); }
       }[state.sort];
-      pts.sort(function (a, b) { var x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * state.dir; });
+      // Ties (e.g. every "No limit" median) fall back to the other spare
+      // column, then the name, so the order is stable and meaningful.
+      var tie = state.sort === "p10" ? function (p) { return spare(p.p50); } : function (p) { return spare(p.p10); };
+      var cmp = function (x, y) { return x < y ? -1 : x > y ? 1 : 0; };
+      pts.sort(function (a, b) {
+        return (cmp(key(a), key(b)) || cmp(tie(a), tie(b))) * state.dir || cmp(nameOf(a).toLowerCase(), nameOf(b).toLowerCase());
+      });
       $("rows").innerHTML = pts.map(function (p) {
         return '<tr class="hr-row" tabindex="0" data-id="' + esc(p.id) + '" aria-selected="' + (p.id === state.sel) + '">' +
           '<td><div class="hr-n">' + (saved[p.id] ? '<span class="hr-star" aria-label="Saved">\u2605</span>' : "") + esc(nameOf(p)) + '</div><div class="hr-c">' + esc(p.id) + " · " + (REG[p.region] || esc(p.region)) + "</div></td>" +
-          '<td class="hr-r hr-num">' + fmtPct(p.at) + "</td>" +
-          '<td class="hr-r hr-num">' + fmtPct(spillAt(p, "solar"), 0) + "</td>" +
-          '<td class="hr-r hr-num">' + fmtPct(spillAt(p, "wind"), 0) + "</td></tr>";
+          '<td class="hr-r hr-num">' + fmtSpare(p.p10) + "</td>" +
+          '<td class="hr-r hr-num">' + fmtSpare(p.p50) + "</td>" +
+          '<td class="hr-r hr-num">' + fmtPct(p.at) + "</td></tr>";
       }).join("");
     }
     function markerColor(p) { return "var(--hr-" + (p.at == null ? "ink2" : status(p.at)[0]) + ")"; }
@@ -624,48 +616,6 @@
       if (e.key !== "Enter" && e.key !== " ") return;
       var r = e.target.closest(".hr-row"); if (r) { e.preventDefault(); pick(r.dataset.id); }
     });
-
-    function spillChart(p, tech, box) {
-      var s = p.spill[tech], o = p.obs[tech];
-      if (!s) { box.innerHTML = '<p class="hr-note">No ' + tech + " farms operate in this region, so there is no " + tech + " output pattern to model with.</p>"; return; }
-      var W = Math.max(300, box.clientWidth || 600), H = 240, m = { l: 44, r: 16, t: 14, b: 34 };
-      var xs = D.sizes, ymax = niceMax(Math.max.apply(null, [10].concat(s.behind, s.shared, o ? [o.net] : [])));
-      var X = function (v) { return m.l + (v - xs[0]) / (xs[xs.length - 1] - xs[0]) * (W - m.l - m.r); };
-      var Y = function (v) { return m.t + (1 - v / ymax) * (H - m.t - m.b); };
-      var g = svgOpen(W, H), yt = ticksFor(ymax), i;
-      for (i = 0; i <= yt; i++) {
-        var v = ymax * i / yt, y = Y(v);
-        g += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + y + '" y2="' + y + '" stroke="var(--hr-grid)" stroke-width="1"/>';
-        g += '<text x="' + (m.l - 8) + '" y="' + (y + 4) + '" text-anchor="end">' + Math.round(v) + "%</text>";
-      }
-      // Label every size that has room; the smallest gap is 50 MW.
-      var every = (X(xs[1]) - X(xs[0])) < 30 ? 2 : 1;
-      xs.forEach(function (v, k) { if (k % every === 0 || k === xs.length - 1) g += '<text x="' + X(v) + '" y="' + (H - m.b + 18) + '" text-anchor="middle">' + v + "</text>"; });
-      g += '<text x="' + (W - m.r) + '" y="' + (H - 2) + '" text-anchor="end">project size, MW</text>';
-      if (o) { var yo = Y(o.net); g += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + yo + '" y2="' + yo + '" stroke="var(--hr-ref)" stroke-width="1.5" stroke-dasharray="4 4"/>'; }
-      var path = function (arr) { return arr.map(function (v, k) { return (k ? "L" : "M") + X(xs[k]).toFixed(1) + "," + Y(v).toFixed(1); }).join(""); };
-      g += '<path d="' + path(s.behind) + '" fill="none" stroke="var(--hr-s2)" stroke-width="2" stroke-linejoin="round"/>';
-      g += '<path d="' + path(s.shared) + '" fill="none" stroke="var(--hr-s1)" stroke-width="2" stroke-linejoin="round"/>';
-      var li = xs.length - 1;
-      g += '<circle cx="' + X(xs[li]) + '" cy="' + Y(s.behind[li]) + '" r="4" fill="var(--hr-s2)" stroke="var(--hr-bg)" stroke-width="2"/>';
-      g += '<circle cx="' + X(xs[li]) + '" cy="' + Y(s.shared[li]) + '" r="4" fill="var(--hr-s1)" stroke="var(--hr-bg)" stroke-width="2"/>';
-      g += '<line class="hr-xh" x1="0" x2="0" y1="' + m.t + '" y2="' + (H - m.b) + '" stroke="var(--hr-axis)" stroke-width="1" visibility="hidden"/>';
-      g += '<rect x="' + m.l + '" y="' + m.t + '" width="' + (W - m.l - m.r) + '" height="' + (H - m.t - m.b) + '" fill="transparent"/></svg><div class="hr-tip" hidden></div>';
-      box.innerHTML = g;
-      var sv = box.querySelector("svg"), tip = box.querySelector(".hr-tip"), xh = box.querySelector(".hr-xh");
-      sv.addEventListener("pointermove", function (ev) {
-        var r = sv.getBoundingClientRect(), px = (ev.clientX - r.left) * W / r.width, k = 0, best = Infinity;
-        xs.forEach(function (v, j) { var d = Math.abs(X(v) - px); if (d < best) { best = d; k = j; } });
-        xh.setAttribute("x1", X(xs[k])); xh.setAttribute("x2", X(xs[k])); xh.setAttribute("visibility", "visible");
-        tip.innerHTML = "<strong>" + xs[k] + " MW " + tech + "</strong><br>Sharing: " + s.shared[k].toFixed(1) + "% spilled<br>Behind existing farms: " + s.behind[k].toFixed(1) + "%" +
-          (o ? "<br>Existing farms today: " + o.net.toFixed(1) + "%" : "");
-        tip.hidden = false;
-        var bx = box.getBoundingClientRect(), tx = X(xs[k]) * r.width / W;
-        tip.style.left = Math.min(Math.max(0, tx + 12), bx.width - tip.offsetWidth) + "px";
-        tip.style.top = "8px";
-      });
-      sv.addEventListener("pointerleave", function () { tip.hidden = true; xh.setAttribute("visibility", "hidden"); });
-    }
 
     function rangeChart(p, box) {
       var rows = [["Generation", p.gen], ["Load", p.load]];
@@ -836,11 +786,7 @@
           function (e) { if (state.sel === id) showError(e); });
         return;
       }
-      var st = status(p.gen.at || 0), size = D.sizes[state.sizeIdx];
-      var spillStat = function (t, s) {
-        return s ? '<div class="hr-stat"><span class="hr-l">New ' + size + " MW " + t + ' farm: output spilled</span><span class="hr-v hr-num">' + s.shared[state.sizeIdx].toFixed(1) +
-          '%</span><span class="hr-f">sharing with existing farms; ' + s.behind[state.sizeIdx].toFixed(1) + "% if behind them · " + (s.src === "local" ? "local" : "regional") + " output pattern</span></div>" : "";
-      };
+      var st = status(p.gen.at || 0);
       var obsText = ["solar", "wind"].filter(function (t) { return p.obs[t]; }).map(function (t) {
         var o = p.obs[t];
         return t + " " + o.net.toFixed(1) + "%" + (o.farm >= 0.05 ? ' <span style="font-size:.8rem;font-weight:400">+ ' + o.farm.toFixed(1) + "% farm caps</span>" : "");
@@ -851,7 +797,6 @@
           (esc(c.d) || '<span class="hr-muted">No description published</span>') + "</div></div>"
           : '<div class="hr-con"><div class="hr-h"><strong>' + title + '</strong></div><div class="hr-d hr-muted">No network constraint limited ' + dir + " here.</div></div>";
       };
-      var tech = state.tech, s = p.spill[tech];
       $("detail").innerHTML =
         '<div class="hr-dhead"><h3>' + esc(nameOf(p)) + "</h3>" +
         '<div class="hr-ids"><span class="hr-mono">' + esc(p.id) + "</span><span>" + (REG[p.region] || esc(p.region)) + "</span><span>" + esc(p.type.toLowerCase()) +
@@ -863,20 +808,9 @@
         '<div class="hr-actions"><button type="button" class="hr-btn hr-quiet" data-hr="save-note">Save note</button><span class="hr-msg" data-hr="note-msg" aria-live="polite"></span></div></div>' +
         '<div class="hr-stats">' +
         '<div class="hr-stat"><span class="hr-l">Time at the generation limit</span><span class="hr-v hr-num">' + fmtPct(p.gen.at) + '</span><span class="hr-f">of five-minute intervals</span></div>' +
-        '<div class="hr-stat"><span class="hr-l">Median generation headroom</span><span class="hr-v hr-num">' + fmtMW(p.gen.q[2]) + '</span><span class="hr-f">P10 ' + fmtMW(p.gen.q[0]) + " · P90 " + fmtMW(p.gen.q[4]) + "</span></div>" +
-        spillStat("solar", p.spill.solar) + spillStat("wind", p.spill.wind) +
-        (obsText ? '<div class="hr-stat"><span class="hr-l">Existing farms here lost to network limits</span><span class="hr-v hr-num" style="font-size:1.1rem">' + obsText + '</span><span class="hr-f">observed, not modelled' + (anyFarm ? "; farm caps are limits AEMO placed on those particular farms, which a new project wouldn't inherit" : "") + '</span></div>' : "") +
+        '<div class="hr-stat"><span class="hr-l">Spare generation headroom, median</span><span class="hr-v hr-num">' + fmtMW(p.gen.q[2]) + '</span><span class="hr-f">at least ' + fmtMW(p.gen.q[0]) + " 90% of the time · " + fmtMW(p.gen.q[4]) + " or more 10% of the time</span></div>" +
+        (obsText ? '<div class="hr-stat"><span class="hr-l">Existing farms here lost to network limits</span><span class="hr-v hr-num" style="font-size:1.1rem">' + obsText + '</span><span class="hr-f">observed, not modelled' + (anyFarm ? "; farm caps are limits AEMO placed on those particular farms, not on the network" : "") + '</span></div>' : "") +
         "</div>" +
-        '<div class="hr-block"><div class="hr-bhead"><h5>Spill for a new project</h5>' +
-        '<div class="hr-seg" role="group" aria-label="Technology"><button type="button" data-t="solar" aria-pressed="' + (tech === "solar") + '">Solar</button><button type="button" data-t="wind" aria-pressed="' + (tech === "wind") + '">Wind</button></div></div>' +
-        '<div class="hr-legend"><span><svg width="18" height="4" aria-hidden="true"><rect width="18" height="3" y="0.5" rx="1.5" fill="var(--hr-s1)"/></svg>Sharing with existing farms</span>' +
-        '<span><svg width="18" height="4" aria-hidden="true"><rect width="18" height="3" y="0.5" rx="1.5" fill="var(--hr-s2)"/></svg>Behind existing farms</span>' +
-        (p.obs[tech] ? '<span><svg width="18" height="4" aria-hidden="true"><line x1="0" x2="18" y1="2" y2="2" stroke="var(--hr-ref)" stroke-width="1.5" stroke-dasharray="4 3"/></svg>Existing ' + tech + " farms today</span>" : "") +
-        '</div><div class="hr-chart" data-hr="c-spill"></div>' +
-        '<details><summary>Show as a table</summary><div class="hr-dt">' +
-        (s ? '<table class="hr-t"><thead><tr><th>Size</th><th class="hr-r">Sharing</th><th class="hr-r">Behind existing farms</th></tr></thead><tbody>' +
-          D.sizes.map(function (z, i) { return '<tr><td class="hr-num">' + z + ' MW</td><td class="hr-r hr-num">' + s.shared[i].toFixed(1) + '%</td><td class="hr-r hr-num">' + s.behind[i].toFixed(1) + "%</td></tr>"; }).join("") + "</tbody></table>" : "") +
-        "</div></details></div>" +
         '<div class="hr-block"><div class="hr-bhead"><h5>Headroom range, P10 to P90</h5><span class="hr-note">box P25 to P75, tick at the median</span></div><div class="hr-chart" data-hr="c-range"></div></div>' +
         '<div class="hr-block"><div class="hr-bhead"><h5>Headroom over time</h5></div>' +
         '<div class="hr-steps-scroll"><div class="hr-seg" role="group" aria-label="Time step" data-hr="steps">' +
@@ -890,9 +824,6 @@
         '<div class="hr-block"><div class="hr-bhead"><h5>Time at the generation limit, by month</h5></div><div class="hr-chart" data-hr="c-month"></div></div>' +
         '<div class="hr-block"><h5>What limits this location</h5><div class="hr-cons">' + con("Generation", p.topGen, "generation") + con("Load", p.topLoad, "load") + "</div>" +
         '<p class="hr-note">AEMO\'s own description of the constraint most often at its limit for this connection point. "O/L" means overload; "on trip of" names the outage the limit protects against.</p></div>';
-      $("detail").querySelectorAll(".hr-seg button").forEach(function (b) {
-        b.addEventListener("click", function () { state.tech = b.dataset.t; renderDetail(); });
-      });
       $("star").addEventListener("click", function () {
         var next = Object.assign({}, saved);
         if (next[p.id]) delete next[p.id]; else next[p.id] = { note: $("note").value.trim(), t: new Date().toISOString() };
@@ -903,7 +834,6 @@
         next[p.id] = { note: note, t: new Date().toISOString() };
         persist(next, "note");
       });
-      spillChart(p, tech, $("c-spill"));
       rangeChart(p, $("c-range"));
       monthChart(p, $("c-month"));
       $("steps").addEventListener("click", function (e) {
