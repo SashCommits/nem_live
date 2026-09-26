@@ -12,12 +12,14 @@
 // it is opened. Subscribers can save locations with private notes, stored
 // encrypted by the service.
 //
-// Layout: NEM-wide figures, a searchable list of connection points, the
-// selected point's detail (spill curve, headroom range, monthly time at the
-// limit, the constraint that limits it), then how far to trust the numbers
-// and how they are calculated. Styles are injected here rather than in the
-// page snippet, so layout changes don't need a re-paste in Ghost. The widget
-// sizes itself to its container (container queries), not the window.
+// Layout: NEM-wide figures, a searchable list of connection points (or a
+// map of them, coloured by how often each is at its limit -- Leaflet loads
+// lazily from cdnjs the first time a viewer opens it), the selected point's
+// detail (spill curve, headroom range, headroom over time, the constraint
+// that limits it), then how far to trust the numbers and how they are
+// calculated. Styles are injected here rather than in the page snippet, so
+// layout changes don't need a re-paste in Ghost. The widget sizes itself to
+// its container (container queries), not the window.
 (function () {
   "use strict";
 
@@ -60,6 +62,14 @@
 .pshr .hr-ctlrow{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.8rem;color:var(--hr-ink2)}
 .pshr .hr-ctlrow select{width:auto}
 .pshr .hr-tablewrap{overflow:auto;max-height:22rem;position:relative}
+.pshr .hr-map-wrap{height:22rem;border-radius:8px;overflow:hidden;position:relative;background:var(--hr-wash)}
+.pshr .hr-map-wrap .leaflet-container{background:var(--hr-wash);font:inherit}
+.pshr .hr-map-wrap .leaflet-control-attribution{font-size:.65rem;color:var(--hr-ink2)}
+.pshr .hr-pin{border-radius:50%;border:2px solid var(--hr-bg)}
+.pshr .hr-pin.hr-sel{border-color:var(--hr-accent);border-width:3px}
+.pshr .hr-maplegend{display:flex;flex-wrap:wrap;gap:.5rem 1rem;font-size:.75rem;color:var(--hr-ink2);padding:.5rem .8rem 0}
+.pshr .hr-maplegend span{display:inline-flex;align-items:center;gap:5px}
+.pshr .hr-mapnote{font-size:.72rem;color:var(--hr-muted);padding:.3rem .8rem .6rem}
 /* Ghost themes style article tables (e.g. .gh-content table:not(.gist table) td); these class-qualified selectors outrank them. */
 .pshr .hr-wrap table.hr-t{display:table;width:100%;max-width:none;margin:0;border:0;border-collapse:collapse;border-spacing:0;background:none;font-size:.8rem;white-space:normal;overflow:visible;box-shadow:none}
 .pshr .hr-wrap table.hr-t th,.pshr .hr-wrap table.hr-t td{border:0;background:none;font-size:inherit;text-transform:none;letter-spacing:normal;line-height:1.4;color:var(--hr-ink)}
@@ -191,6 +201,25 @@
     return Math.ceil(v / 20) * 20;
   };
 
+  // Leaflet (map view) loads once per page, only if a viewer opens the map.
+  var LEAFLET_V = "1.9.4", leafletP = null;
+  function loadLeaflet() {
+    if (window.L) return Promise.resolve(window.L);
+    if (leafletP) return leafletP;
+    leafletP = new Promise(function (resolve, reject) {
+      var css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/" + LEAFLET_V + "/leaflet.min.css";
+      document.head.appendChild(css);
+      var js = document.createElement("script");
+      js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/" + LEAFLET_V + "/leaflet.min.js";
+      js.onload = function () { resolve(window.L); };
+      js.onerror = function () { reject(new Error("Couldn't load the map library.")); };
+      document.head.appendChild(js);
+    });
+    return leafletP;
+  }
+
   var SHELL = `
 <div class="hr-wrap">
   <p class="hr-lede"><span data-hr="period"></span> Source: AEMO dispatch data. Headroom and spill are The Power Socket's calculations.</p>
@@ -210,9 +239,13 @@
           <label data-hr="size-label">New project size</label>
           <select data-hr="size"></select>
           <span data-hr="count" class="hr-muted"></span>
+          <div class="hr-seg" role="group" aria-label="View" data-hr="view" style="margin-left:auto">
+            <button type="button" data-v="list" aria-pressed="true">List</button>
+            <button type="button" data-v="map" aria-pressed="false">Map</button>
+          </div>
         </div>
       </div>
-      <div class="hr-tablewrap">
+      <div class="hr-tablewrap" data-hr="listview">
         <table class="hr-t">
           <thead><tr>
             <th><button data-sort="name">Location</button></th>
@@ -222,6 +255,16 @@
           </tr></thead>
           <tbody data-hr="rows"></tbody>
         </table>
+      </div>
+      <div data-hr="mapview" hidden>
+        <div class="hr-maplegend">
+          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-good)"/></svg>Rarely at limit</span>
+          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-warn)"/></svg>Sometimes</span>
+          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-serious)"/></svg>Often</span>
+          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-crit)"/></svg>Mostly at limit</span>
+        </div>
+        <div class="hr-map-wrap" data-hr="map"></div>
+        <p class="hr-mapnote" data-hr="mapnote"></p>
       </div>
     </div>
     <div class="hr-panel hr-detail" data-hr="detail" aria-live="polite"></div>
@@ -356,6 +399,7 @@
     var byId = new Map(D.points.map(function (p) { return [p.id, p]; }));
     var details = new Map();
     var nameOf = function (p) { return p.names.length ? p.names.join(" / ") : p.id; };
+    var map = null, mapMarkers = new Map(), mapErr = false;
 
     var per = D.period.split("..");
     $("period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]) + ", every five-minute interval.";
@@ -380,7 +424,7 @@
         return '<tr><td>' + bands[b] + '</td><td class="hr-r hr-num">' + cell("solar") + '</td><td class="hr-r hr-num">' + cell("wind") + "</td></tr>";
       }).join("") + "</tbody></table>";
 
-    var state = { q: "", region: "ALL", sizeIdx: Math.max(0, D.sizes.indexOf(300)), sort: "at", dir: -1, sel: null, tech: "solar", step: "1d", end: null };
+    var state = { q: "", region: "ALL", sizeIdx: Math.max(0, D.sizes.indexOf(300)), sort: "at", dir: -1, sel: null, tech: "solar", step: "1d", end: null, view: "list" };
     var sizeSel = $("size");
     sizeSel.innerHTML = D.sizes.map(function (s, i) { return '<option value="' + i + '">' + s + " MW</option>"; }).join("");
     sizeSel.value = String(state.sizeIdx);
@@ -419,11 +463,17 @@
 
     // The list carries spill for the selected size only (p.solar, p.wind).
     var spillAt = function (p, tech) { return p[tech]; };
-    function renderList() {
-      var pts = D.points.filter(function (p) {
+    function filteredPoints() {
+      return D.points.filter(function (p) {
         return (state.region === "ALL" || p.region === state.region || (state.region === "SAVED" && saved[p.id])) &&
           (!state.q || p.id.toLowerCase().indexOf(state.q) >= 0 || p.names.join(" ").toLowerCase().indexOf(state.q) >= 0 || p.duids.join(" ").toLowerCase().indexOf(state.q) >= 0);
       });
+    }
+    function renderList() {
+      var pts = filteredPoints();
+      $("count").textContent = pts.length + " shown";
+      if (state.view === "map") { renderMap(pts); return; }
+      $("listview").hidden = false; $("mapview").hidden = true;
       var key = {
         name: function (p) { return nameOf(p).toLowerCase(); },
         at: function (p) { return p.at == null ? -1 : p.at; },
@@ -431,7 +481,6 @@
         wind: function (p) { var v = spillAt(p, "wind"); return v == null ? -1 : v; }
       }[state.sort];
       pts.sort(function (a, b) { var x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * state.dir; });
-      $("count").textContent = pts.length + " shown";
       $("rows").innerHTML = pts.map(function (p) {
         return '<tr class="hr-row" tabindex="0" data-id="' + esc(p.id) + '" aria-selected="' + (p.id === state.sel) + '">' +
           '<td><div class="hr-n">' + (saved[p.id] ? '<span class="hr-star" aria-label="Saved">\u2605</span>' : "") + esc(nameOf(p)) + '</div><div class="hr-c">' + esc(p.id) + " · " + (REG[p.region] || esc(p.region)) + "</div></td>" +
@@ -440,9 +489,59 @@
           '<td class="hr-r hr-num">' + fmtPct(spillAt(p, "wind"), 0) + "</td></tr>";
       }).join("");
     }
+    function markerColor(p) { return "var(--hr-" + (p.at == null ? "ink2" : status(p.at)[0]) + ")"; }
+    function styleMarker(id) {
+      var m = mapMarkers.get(id); if (!m) return;
+      var sel = id === state.sel;
+      m.setStyle({ weight: sel ? 3 : 2, color: sel ? "var(--hr-accent)" : "var(--hr-bg)", radius: sel ? 8 : 6 });
+      if (sel) m.bringToFront();
+    }
+    function renderMap(pts) {
+      $("listview").hidden = true; $("mapview").hidden = false;
+      if (mapErr) return;
+      loadLeaflet().then(function (L) {
+        if (!root.isConnected) return; // widget torn down while the library was loading
+        if (!map) {
+          map = L.map($("map"), { scrollWheelZoom: false, worldCopyJump: true }).setView([-27, 134], 4);
+          L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+            maxZoom: 18, attribution: "© <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\" rel=\"noopener\">OpenStreetMap</a> contributors"
+          }).addTo(map);
+        }
+        var withPos = pts.filter(function (p) { return p.lat != null && p.lon != null; });
+        var seen = new Set(withPos.map(function (p) { return p.id; }));
+        mapMarkers.forEach(function (m, id) { if (!seen.has(id)) { map.removeLayer(m); mapMarkers.delete(id); } });
+        withPos.forEach(function (p) {
+          var m = mapMarkers.get(p.id);
+          if (!m) {
+            m = L.circleMarker([p.lat, p.lon], { radius: 6, weight: 2, color: "var(--hr-bg)", fillColor: markerColor(p), fillOpacity: 0.9 })
+              .addTo(map).on("click", function () { pick(p.id); });
+            m.bindTooltip(esc(nameOf(p)));
+            mapMarkers.set(p.id, m);
+          } else {
+            m.setStyle({ fillColor: markerColor(p) });
+          }
+        });
+        mapMarkers.forEach(function (m, id) { styleMarker(id); });
+        var missing = pts.length - withPos.length;
+        $("mapnote").textContent = missing > 0
+          ? missing + " of " + pts.length + " shown locations aren't placed yet (no station address we could match to a map position); use the list to reach them. Positions are approximate, from AEMO's registered station address."
+          : "Positions are approximate, from AEMO's registered station address.";
+        setTimeout(function () { map.invalidateSize(); if (withPos.length) map.fitBounds(withPos.map(function (p) { return [p.lat, p.lon]; }), { padding: [20, 20], maxZoom: 9 }); }, 0);
+      }, function (e) {
+        mapErr = true;
+        $("map").innerHTML = '<div class="hr-status">' + esc(e.message) + "</div>";
+      });
+    }
+    $("view").addEventListener("click", function (e) {
+      var b = e.target.closest("button"); if (!b) return;
+      state.view = b.dataset.v;
+      Array.prototype.forEach.call($("view").children, function (c) { c.setAttribute("aria-pressed", String(c === b)); });
+      renderList();
+    });
     function pick(id) {
       if (!byId.has(id)) return;
       state.sel = id; state.end = null; renderList(); renderDetail();
+      if (map) styleMarker(id);
       // Single column (phones, narrow themes): the detail sits below the list.
       var det = $("detail"), list = root.querySelector(".hr-list");
       if (det.offsetTop > list.offsetTop + list.offsetHeight - 2 && det.getBoundingClientRect().top > window.innerHeight * 0.6) {
