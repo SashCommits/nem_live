@@ -190,8 +190,8 @@
   <p class="hr-lede"><span data-hr="period"></span> Source: AEMO dispatch data. Headroom and spill are The Power Socket's calculations.</p>
   <section class="hr-fleet" aria-label="Across the NEM">
     <div><span class="hr-v hr-num" data-hr="f-points"></span><span class="hr-l">connection points where a network constraint was active</span></div>
-    <div><span class="hr-v hr-num" data-hr="f-solar"></span><span class="hr-l">of existing solar farms' output lost to network limits</span></div>
-    <div><span class="hr-v hr-num" data-hr="f-wind"></span><span class="hr-l">of existing wind farms' output lost to network limits</span></div>
+    <div><span class="hr-v hr-num" data-hr="f-solar"></span><span class="hr-l">of existing solar farms' output held back by network or security limits</span></div>
+    <div><span class="hr-v hr-num" data-hr="f-wind"></span><span class="hr-l">of existing wind farms' output held back by network or security limits</span></div>
     <div><span class="hr-v hr-num" data-hr="f-val"></span><span class="hr-l">of the time AEMO held a farm back where we compute zero headroom</span></div>
   </section>
   <div class="hr-main">
@@ -230,7 +230,7 @@
     <section class="hr-panel">
       <h4>How it's calculated</h4>
       <ol class="hr-steps">
-        <li><strong>Every five minutes</strong>, AEMO dispatches the market subject to network constraints: equations that keep each line and transformer within its limit if something else trips. It publishes how close each one came to its limit and how strongly each connection point pushes on it.</li>
+        <li><strong>Every five minutes</strong>, AEMO dispatches the market subject to network constraints: equations that keep each line and transformer within its limit, and the system stable, if something else trips. It publishes how close each one came to its limit and how strongly each connection point pushes on it.</li>
         <li><strong>Headroom</strong> is the extra megawatts a connection point could have injected before its tightest active constraint reached its limit, at AEMO's actual dispatch. We compute it for every interval in the year.</li>
         <li><strong>Spill</strong> adds a new solar or wind farm of the chosen size, running on the output pattern of existing farms nearby, and counts the energy that would not fit. Two rules for sharing room with farms already there give the central and pessimistic cases.</li>
         <li><strong>Existing farms</strong> shows what AEMO actually held back from the farms already at that connection point, with no modelling.</li>
@@ -352,8 +352,10 @@
     $("period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]) + ", every five-minute interval.";
     $("foot-period").textContent = monthLong(per[0]) + " to " + monthLong(per[1]);
     $("f-points").textContent = D.count.toLocaleString();
-    $("f-solar").textContent = D.fleet.solar.net.toFixed(1) + "%";
-    $("f-wind").textContent = D.fleet.wind.net.toFixed(1) + "%";
+    // Network limits plus caps on particular farms: AEMO's "network curtailment".
+    var lim = function (f) { return (f.limits != null ? f.limits : f.net).toFixed(1) + "%"; };
+    $("f-solar").textContent = lim(D.fleet.solar);
+    $("f-wind").textContent = lim(D.fleet.wind);
     var atLim = D.validation.filter(function (v) { return v.headroom_band.indexOf("<1") === 0; });
     var capped = atLim.reduce(function (a, v) { return a + v.capped; }, 0);
     var total = atLim.reduce(function (a, v) { return a + v.unit_intervals; }, 0);
@@ -552,7 +554,11 @@
         return s ? '<div class="hr-stat"><span class="hr-l">New ' + size + " MW " + t + ' farm: output spilled</span><span class="hr-v hr-num">' + s.shared[state.sizeIdx].toFixed(1) +
           '%</span><span class="hr-f">sharing with existing farms; ' + s.behind[state.sizeIdx].toFixed(1) + "% if behind them · " + (s.src === "local" ? "local" : "regional") + " output pattern</span></div>" : "";
       };
-      var obsText = ["solar", "wind"].filter(function (t) { return p.obs[t]; }).map(function (t) { return t + " " + p.obs[t].net.toFixed(1) + "%"; }).join(", ");
+      var obsText = ["solar", "wind"].filter(function (t) { return p.obs[t]; }).map(function (t) {
+        var o = p.obs[t];
+        return t + " " + o.net.toFixed(1) + "%" + (o.farm >= 0.05 ? ' <span style="font-size:.8rem;font-weight:400">+ ' + o.farm.toFixed(1) + "% farm caps</span>" : "");
+      }).join(", ");
+      var anyFarm = ["solar", "wind"].some(function (t) { return p.obs[t] && p.obs[t].farm >= 0.05; });
       var con = function (title, c, dir) {
         return c ? '<div class="hr-con"><div class="hr-h"><strong>' + title + '</strong><span class="hr-mono">' + esc(c.id) + "</span><span>at the limit in " + c.n.toLocaleString() + ' intervals</span></div><div class="hr-d">' +
           (esc(c.d) || '<span class="hr-muted">No description published</span>') + "</div></div>"
@@ -572,7 +578,7 @@
         '<div class="hr-stat"><span class="hr-l">Time at the generation limit</span><span class="hr-v hr-num">' + fmtPct(p.gen.at) + '</span><span class="hr-f">of five-minute intervals</span></div>' +
         '<div class="hr-stat"><span class="hr-l">Median generation headroom</span><span class="hr-v hr-num">' + fmtMW(p.gen.q[2]) + '</span><span class="hr-f">P10 ' + fmtMW(p.gen.q[0]) + " · P90 " + fmtMW(p.gen.q[4]) + "</span></div>" +
         spillStat("solar", p.spill.solar) + spillStat("wind", p.spill.wind) +
-        (obsText ? '<div class="hr-stat"><span class="hr-l">Existing farms here lost to network limits</span><span class="hr-v hr-num" style="font-size:1.1rem">' + obsText + '</span><span class="hr-f">observed, not modelled</span></div>' : "") +
+        (obsText ? '<div class="hr-stat"><span class="hr-l">Existing farms here lost to network limits</span><span class="hr-v hr-num" style="font-size:1.1rem">' + obsText + '</span><span class="hr-f">observed, not modelled' + (anyFarm ? "; farm caps are limits AEMO placed on those particular farms, which a new project wouldn't inherit" : "") + '</span></div>' : "") +
         "</div>" +
         '<div class="hr-block"><div class="hr-bhead"><h5>Spill for a new project</h5>' +
         '<div class="hr-seg" role="group" aria-label="Technology"><button type="button" data-t="solar" aria-pressed="' + (tech === "solar") + '">Solar</button><button type="button" data-t="wind" aria-pressed="' + (tech === "wind") + '">Wind</button></div></div>' +
