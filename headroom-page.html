@@ -8,23 +8,7 @@
      data-api="SERVICE_URL"
      data-default="NWRK1W"></div>
 
-<script>
-/* Loads the widget at main's exact current commit, not @main: jsDelivr
-   caches what @main points to for up to 12 hours, and browsers keep an @main
-   file for 7 days, so an @main URL can serve a stale widget for a day or
-   more. A commit-pinned URL is a new address for every change, so it can
-   never be stale. GitHub's API answers the lookup for any browser (CORS *)
-   and allows each visitor 60 lookups an hour; if it fails, fall back to
-   @main. */
-(function () {
-  function load(ref) {
-    var s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/gh/SashCommits/nem_live@" + ref + "/headroom-widget.js";
-    document.body.appendChild(s);
-  }
-  fetch("https://api.github.com/repos/SashCommits/nem_live/commits/main", { headers: { Accept: "application/vnd.github.sha" } })
-    .then(function (r) { return r.ok ? r.text() : ""; })
-    .then(function (sha) { sha = (sha || "").trim(); load(/^[0-9a-f]{40}$/.test(sha) ? sha : "main"); },
-          function () { load("main"); });
-})();
-</script>
+<!-- The widget's JavaScript comes from the service (/api/widget), which
+     serves nem_live's current headroom-widget.js with a 5-minute cache, so
+     widget changes reach readers within minutes, with no re-paste. -->
+<script src="SERVICE_URL/api/widget"></script>
