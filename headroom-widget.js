@@ -1,7 +1,7 @@
 // PowerSocket NEM Headroom Explorer widget, for the Ghost page.
-// Embed with (see headroom-page.html):
-//   <div class="pshr" data-api="<service URL>"></div>
-//   <script src="https://cdn.jsdelivr.net/gh/OWNER/REPO@main/headroom-widget.js"></script>
+// Embed with the snippet in headroom-page.html: a <div class="pshr"
+// data-api="<service URL>"> plus a loader that fetches this file at main's
+// exact current commit (an @main URL can be served stale for a day or more).
 //
 // Subscribers only. The data lives in the private powersocket-grid-headroom
 // service, never in this repository or in a public file. The widget asks the
