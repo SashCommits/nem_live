@@ -14,11 +14,10 @@
 // encrypted by the service.
 //
 // Layout: NEM-wide figures, a searchable list of connection points (or a
-// map of them, coloured by how often each is at its limit -- Leaflet loads
-// lazily from cdnjs the first time a viewer opens it), the selected point's
-// detail (spare headroom, headroom range, headroom over time, the constraint
-// that limits it), then how far to trust the numbers and how they are
-// calculated. Styles are injected here rather than in the page snippet, so
+// map of them -- Leaflet loads lazily from cdnjs the first time a viewer
+// opens it), the selected point's detail (spare headroom, headroom range,
+// headroom over time, the constraint that limits it), then how far to trust
+// the numbers and how they are calculated. Styles are injected here rather than in the page snippet, so
 // layout changes don't need a re-paste in Ghost. The widget sizes itself to
 // its container (container queries), not the window.
 (function () {
@@ -29,7 +28,7 @@
   --hr-ink:#0b0b0b;--hr-ink2:#52514e;--hr-muted:#6e6c66;--hr-grid:#e1e0d9;--hr-axis:#c3c2b7;
   --hr-line:rgba(11,11,11,.12);--hr-wash:rgba(11,11,11,.04);--hr-hover:rgba(42,120,214,.08);--hr-sel:rgba(42,120,214,.14);
   --hr-accent:#2a78d6;--hr-s1:#2a78d6;--hr-s2:#eb6834;--hr-ref:#52514e;--hr-band:#b7d3f6;
-  --hr-good:#0ca30c;--hr-warn:#c98500;--hr-serious:#d9602f;--hr-crit:#d03b3b;--hr-bg:#fff;
+  --hr-warn:#c98500;--hr-bg:#fff;
   --hr-mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace}
 .pshr.hr-dark{--hr-ink:#fff;--hr-ink2:#c3c2b7;--hr-muted:#9a988f;--hr-grid:#2c2c2a;--hr-axis:#45443f;
   --hr-line:rgba(255,255,255,.12);--hr-wash:rgba(255,255,255,.05);--hr-hover:rgba(57,135,229,.12);--hr-sel:rgba(57,135,229,.22);
@@ -69,8 +68,6 @@
 .pshr .hr-map-wrap .leaflet-control-attribution{font-size:.65rem;color:var(--hr-ink2)}
 .pshr .hr-pin{border-radius:50%;border:2px solid var(--hr-bg)}
 .pshr .hr-pin.hr-sel{border-color:var(--hr-accent);border-width:3px}
-.pshr .hr-maplegend{display:flex;flex-wrap:wrap;gap:.5rem 1rem;font-size:.75rem;color:var(--hr-ink2);padding:.5rem .8rem 0}
-.pshr .hr-maplegend span{display:inline-flex;align-items:center;gap:5px}
 .pshr .hr-mapnote{font-size:.72rem;color:var(--hr-muted);padding:.3rem .8rem .6rem}
 /* Ghost themes style article tables (e.g. .gh-content table:not(.gist table) td); these class-qualified selectors outrank them. */
 .pshr .hr-wrap table.hr-t{display:table;width:100%;max-width:none;margin:0;border:0;border-collapse:collapse;border-spacing:0;background:none;font-size:.8rem;white-space:normal;overflow:visible;box-shadow:none}
@@ -88,8 +85,6 @@
 .pshr .hr-detail{padding:1.1rem;display:grid;gap:1.4rem;min-width:0}
 .pshr .hr-dhead{display:grid;gap:.35rem}
 .pshr .hr-ids{display:flex;flex-wrap:wrap;gap:2px 12px;font-size:.8rem;color:var(--hr-ink2)}
-.pshr .hr-pill{display:inline-flex;align-items:center;gap:6px;font-size:.8rem;font-weight:500;padding:1px 10px 1px 8px;border-radius:999px;border:1px solid var(--hr-line);width:fit-content}
-.pshr .hr-pill svg{flex:none}
 .pshr .hr-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1rem 1.4rem}
 .pshr .hr-stat{display:grid;gap:2px;align-content:start}
 .pshr .hr-stat .hr-l{font-size:.8rem;color:var(--hr-ink2);line-height:1.35}
@@ -183,17 +178,6 @@
   var fmtMW = function (v) { return v == null ? "no limit" : Math.round(v).toLocaleString() + " MW"; };
   var monthLabel = function (m) { return new Date(m + "-01T00:00:00").toLocaleString("en-AU", { month: "short" }); };
   var monthLong = function (m) { return new Date(m + "-01T00:00:00").toLocaleString("en-AU", { month: "long", year: "numeric" }); };
-  var status = function (at) {
-    return at < 2 ? ["good", "Rarely at limit"] : at < 10 ? ["warn", "Sometimes at limit"] : at < 25 ? ["serious", "Often at limit"] : ["crit", "Mostly at limit"];
-  };
-  var statusIcon = function (k) {
-    return {
-      good: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="var(--hr-good)"/></svg>',
-      warn: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1 11 10H1Z" fill="var(--hr-warn)"/></svg>',
-      serious: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1.5" y="1.5" width="9" height="9" transform="rotate(45 6 6)" fill="var(--hr-serious)"/></svg>',
-      crit: '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="1.5" fill="var(--hr-crit)"/></svg>'
-    }[k];
-  };
   var svgOpen = function (w, h) { return '<svg viewBox="0 0 ' + w + " " + h + '" role="img">'; };
   // Tick counts that give whole-number labels for every maximum niceMax returns.
   var ticksFor = function (ymax) { return ymax % 5 === 0 ? 5 : 4; };
@@ -258,12 +242,6 @@
         <p class="hr-mapnote">Spare generation headroom in MW: what was available at least 90% of the time, and half the time. "No limit" means no network constraint applied that often.</p>
       </div>
       <div data-hr="mapview" hidden>
-        <div class="hr-maplegend">
-          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-good)"/></svg>Rarely at limit</span>
-          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-warn)"/></svg>Sometimes</span>
-          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-serious)"/></svg>Often</span>
-          <span><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill="var(--hr-crit)"/></svg>Mostly at limit</span>
-        </div>
         <div class="hr-map-wrap" data-hr="map"></div>
         <p class="hr-mapnote" data-hr="mapnote"></p>
       </div>
@@ -483,11 +461,10 @@
           '<td class="hr-r hr-num">' + fmtPct(p.at) + "</td></tr>";
       }).join("");
     }
-    function markerColor(p) { return "var(--hr-" + (p.at == null ? "ink2" : status(p.at)[0]) + ")"; }
     function styleMarker(id) {
       var m = mapMarkers.get(id); if (!m) return;
       var sel = id === state.sel;
-      m.setStyle({ weight: sel ? 3 : 2, color: sel ? "var(--hr-accent)" : "var(--hr-bg)", radius: sel ? 8 : 6 });
+      m.setStyle({ weight: sel ? 3 : 2, color: sel ? "var(--hr-ink)" : "var(--hr-bg)", radius: sel ? 8 : 6 });
       if (sel) m.bringToFront();
     }
     // Many stations only resolve to their town, or to the same site under
@@ -560,7 +537,7 @@
         withPos.forEach(function (p) {
           var m = mapMarkers.get(p.id);
           if (!m) {
-            m = L.circleMarker([p.lat, p.lon], { radius: 6, weight: 2, color: "var(--hr-bg)", fillColor: markerColor(p), fillOpacity: 0.9 })
+            m = L.circleMarker([p.lat, p.lon], { radius: 6, weight: 2, color: "var(--hr-bg)", fillColor: "var(--hr-s1)", fillOpacity: 0.9 })
               .addTo(map).on("click", function () {
                 // A stack at country scale: zoom in to it rather than picking
                 // whichever of its pins happens to be on top.
@@ -569,8 +546,6 @@
               });
             m.bindTooltip(esc(nameOf(p)));
             mapMarkers.set(p.id, m);
-          } else {
-            m.setStyle({ fillColor: markerColor(p) });
           }
           m._hrBase = [p.lat, p.lon];
         });
@@ -786,7 +761,6 @@
           function (e) { if (state.sel === id) showError(e); });
         return;
       }
-      var st = status(p.gen.at || 0);
       var obsText = ["solar", "wind"].filter(function (t) { return p.obs[t]; }).map(function (t) {
         var o = p.obs[t];
         return t + " " + o.net.toFixed(1) + "%" + (o.farm >= 0.05 ? ' <span style="font-size:.8rem;font-weight:400">+ ' + o.farm.toFixed(1) + "% farm caps</span>" : "");
@@ -801,7 +775,7 @@
         '<div class="hr-dhead"><h3>' + esc(nameOf(p)) + "</h3>" +
         '<div class="hr-ids"><span class="hr-mono">' + esc(p.id) + "</span><span>" + (REG[p.region] || esc(p.region)) + "</span><span>" + esc(p.type.toLowerCase()) +
         '</span><span>units: <span class="hr-mono">' + esc(p.duids.join(", ")) + "</span></span></div>" +
-        '<span class="hr-pill">' + statusIcon(st[0]) + st[1] + "</span></div>" +
+        "</div>" +
         '<div class="hr-mine"><div class="hr-bhead"><h5>Your notes</h5><button type="button" class="hr-btn' + (saved[p.id] ? " hr-quiet" : "") + '" data-hr="star" aria-pressed="' + !!saved[p.id] + '">' +
         (saved[p.id] ? "\u2605 Saved" : "\u2606 Save location") + "</button></div>" +
         '<textarea data-hr="note" maxlength="2000" placeholder="Private notes on this location \u2013 only you can see these">' + esc(saved[p.id] ? saved[p.id].note : "") + "</textarea>" +
