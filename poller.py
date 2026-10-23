@@ -201,6 +201,8 @@ class Store:
         self.hourly_fuels = self._read("hourly_fuels")
         state = root / "state.json"
         self.seen = set(json.loads(state.read_text())) if state.exists() else set()
+        attempts = root / "archive_attempts.json"
+        self.archive_attempts = json.loads(attempts.read_text()) if attempts.exists() else {}
 
     def _read(self, name):
         p = self.root / f"{name}.parquet"
@@ -246,6 +248,11 @@ class Store:
         cutoff = (market_now() - timedelta(days=3)).strftime("%Y%m%d%H%M")
         self.seen = {f for f in self.seen if (m := re.search(r"_(\d{12})", f)) and m.group(1) >= cutoff}
         atomic_write(self.root / "state.json", json.dumps(sorted(self.seen)))
+        # Throttle official archive re-fetches when a requested interval is
+        # genuinely absent there, rather than hitting NEMWeb every 5 minutes.
+        oldest = (market_now() - self.keep).date().isoformat()
+        self.archive_attempts = {day: when for day, when in self.archive_attempts.items() if day >= oldest}
+        atomic_write(self.root / "archive_attempts.json", json.dumps(self.archive_attempts, sort_keys=True))
 
 
 def atomic_write(path: Path, text: str):
@@ -450,6 +457,104 @@ def publish(store: "Store", registry, out: Path, hours: int, long_days: int):
 
 
 # --------------------------------------------------------------------------
+# Recover verified missing 5-minute PRICE / REGIONSUM rows from daily archives
+# --------------------------------------------------------------------------
+ARCHIVE_DELAY_DAYS = 2               # Current reports roll off after ~2 days
+ARCHIVE_RETRY_HOURS = 4              # failed/partial archive reads are throttled
+DISPATCH_INTERVALS = 288
+
+
+def archived_dispatchis(raw: bytes) -> dict[str, pd.DataFrame]:
+    """Read AEMO's daily DispatchIS ZIP (ZIPs of 5-minute ZIPs of I/D CSV).
+
+    Uses extract() so the exact same INTERVENTION=0 and numeric column rules
+    as the live stream apply. Never interpolate or forward-fill market prices.
+    """
+    parts = {"price": [], "demand": []}
+
+    def descend(payload):
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.namelist()
+            if any(n.lower().endswith(".csv") for n in members):
+                for name, df in extract("dispatchis", payload).items():
+                    parts[name].append(df)
+            for name in members:
+                if name.lower().endswith(".zip"):
+                    descend(archive.read(name))
+
+    descend(raw)
+    return {name: pd.concat(frames, ignore_index=True).drop_duplicates(KEYS[name], keep="last")
+            for name, frames in parts.items() if frames}
+
+
+def missing_dispatch_keys(df: pd.DataFrame, day, value: str) -> set:
+    """All absent or null (timestamp, region) pairs in one complete market day."""
+    start = datetime.combine(day, datetime.min.time())
+    stamps = pd.date_range(start + timedelta(minutes=5), periods=DISPATCH_INTERVALS, freq="5min")
+    expected = {(stamp, reg) for stamp in stamps for reg in REGIONS["nem"]}
+    if df.empty:
+        return expected
+    rows = df[(df["SETTLEMENTDATE"] > start) &
+              (df["SETTLEMENTDATE"] <= start + timedelta(days=1))]
+    rows = rows[rows[value].notna()]
+    observed = set(zip(rows["SETTLEMENTDATE"], rows["REGIONID"]))
+    return expected - observed
+
+
+def restore_archived_dispatch_gaps(http, store: Store):
+    """Repair holes in retained market history from *original* AEMO daily archives.
+
+    Only fetch a dated archive when that day already has live data but price or
+    demand is missing for some region/time. Archive rows update only those
+    missing pairs. An unavailable archive leaves nulls intact, where the
+    newsroom's complete-day gate will hold publication.
+    """
+    now = market_now()
+    oldest = min(int(store.keep.days), 7)
+    for offset in range(ARCHIVE_DELAY_DAYS, oldest):
+        day = (now - timedelta(days=offset)).date()
+        start = datetime.combine(day, datetime.min.time())
+        present = {}
+        for kind in ("price", "demand"):
+            table = store.tables[kind]
+            present[kind] = (not table.empty and
+                             ((table["SETTLEMENTDATE"] > start) &
+                              (table["SETTLEMENTDATE"] <= start + timedelta(days=1))).any())
+        if not all(present.values()):
+            continue   # no recent-day live baseline to reconcile
+        missing = {kind: missing_dispatch_keys(store.tables[kind], day, value)
+                   for kind, value in (("price", "RRP"), ("demand", "TOTALDEMAND"))}
+        if not any(missing.values()):
+            continue
+        last = store.archive_attempts.get(day.isoformat())
+        if last and now - datetime.fromisoformat(last) < timedelta(hours=ARCHIVE_RETRY_HOURS):
+            continue
+        store.archive_attempts[day.isoformat()] = now.isoformat()
+        url = f"{BASE}/Reports/Archive/DispatchIS_Reports/PUBLIC_DISPATCHIS_{day:%Y%m%d}.zip"
+        try:
+            response = http.get(url, timeout=120)
+            response.raise_for_status()
+            archived = archived_dispatchis(response.content)
+            for kind, wanted in missing.items():
+                if not wanted or kind not in archived:
+                    continue
+                rows = archived[kind]
+                values = "RRP" if kind == "price" else "TOTALDEMAND"
+                rows = rows[rows[values].notna()]
+                rows = rows[[ (ts, reg) in wanted for ts, reg in
+                             zip(rows["SETTLEMENTDATE"], rows["REGIONID"])]]
+                if not rows.empty:
+                    store.add(kind, rows)
+            remaining = {kind: len(missing_dispatch_keys(store.tables[kind], day, value))
+                         for kind, value in (("price", "RRP"), ("demand", "TOTALDEMAND"))}
+            log.info("DispatchIS archive %s: missing price/demand pairs %d/%d -> %d/%d",
+                     day, len(missing["price"]), len(missing["demand"]),
+                     remaining["price"], remaining["demand"])
+        except Exception as exc:
+            log.warning("DispatchIS archive recovery %s unavailable: %s", day, exc)
+
+
+# --------------------------------------------------------------------------
 # Main loop
 # --------------------------------------------------------------------------
 def poll_once(http, store: Store, backfill: timedelta, registry: pd.DataFrame):
@@ -470,6 +575,7 @@ def poll_once(http, store: Store, backfill: timedelta, registry: pd.DataFrame):
                 store.seen.add(url.rsplit("/", 1)[-1])
             except Exception as exc:
                 log.warning("Skipped %s: %s", url, exc)
+    restore_archived_dispatch_gaps(http, store)
     store.update_hourly(registry)
     store.save()
 
