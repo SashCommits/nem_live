@@ -330,11 +330,25 @@
   }
 
   function start(root) {
-    var api = root._hrApi;
-    root.innerHTML = '<div class="hr-status">Loading the headroom explorer\u2026</div>';
+    var api = root._hrApi, loader = window.psBatteryLoader;
+    if (loader) loader.loading(root, "Loading grid headroom…");
+    root.innerHTML = loader ? "" : '<div class="hr-status">Loading the headroom explorer\u2026</div>';
     Promise.all([api.list(), api.load("locations")])
-      .then(function (r) { build(root, r[0], (r[1] && r[1].value) || {}, api, root._hrTheme); })
-      .catch(function (e) { gate(root, e); });
+      .then(function (r) {
+        build(root, r[0], (r[1] && r[1].value) || {}, api, root._hrTheme);
+        if (loader) loader.done(root);
+      })
+      .catch(function (e) {
+        // Sign-in and plan gates are not data failures: preserve their links.
+        if (!loader || e.code === "signed_out" || e.code === "not_subscribed" ||
+            e.code === "wrong_tier") {
+          if (loader) loader.done(root);
+          gate(root, e);
+          return;
+        }
+        root.textContent = "";
+        loader.error(root, "Couldn't load grid headroom. Check your connection.", function () { start(root); });
+      });
   }
 
   function initWidget(root) {
