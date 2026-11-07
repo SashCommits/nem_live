@@ -133,6 +133,9 @@
 
   function initWidget(root) {
     if (!root.dataset.api) return;
+    if (root._psElecThemeObserver) root._psElecThemeObserver.disconnect();
+    var loader = window.psBatteryLoader; // Provided by the Power Socket Ghost theme.
+    if (loader) loader.loading(root, "Loading electrification data…");
     injectStyles();
     var api = root.dataset.api;
     var COUNTRIES = DEFAULT_COUNTRIES, SECTORS = DEFAULT_SECTORS;
@@ -143,7 +146,7 @@
     var ui = el("div", "ps2");
     root.textContent = "";
     root.appendChild(ui);
-    ui.appendChild(el("div", "ps2-status", "Loading electrification data…"));
+    if (!loader) ui.appendChild(el("div", "ps2-status", "Loading electrification data…"));
 
     function colors() {
       return SERIES[ui.classList.contains("ps2-dark") ? "dark" : "light"];
@@ -202,10 +205,29 @@
       var any = Object.keys(state.data).some(function (k) { return hasSeries(state.data[k]); });
       if (!any) {
         ui.textContent = "";
-        ui.appendChild(el("div", "ps2-status", "Electrification data is unavailable right now."));
+        var retry = function () { initWidget(root); };
+        if (loader) loader.error(root, "Couldn't load electrification data. Check your connection.", retry);
+        else {
+          ui.appendChild(el("div", "ps2-status", "Electrification data is unavailable right now."));
+          var button = el("button", "pe-btn", "Try again");
+          button.type = "button";
+          button.addEventListener("click", retry);
+          ui.appendChild(button);
+        }
         return;
       }
       build();
+      if (loader) loader.done(root);
+    }).catch(function () {
+      var retry = function () { initWidget(root); };
+      if (loader) loader.error(root, "Couldn't load electrification data. Try again.", retry);
+      else {
+        ui.textContent = "";
+        ui.appendChild(el("div", "ps2-status", "Electrification data couldn't load."));
+        var button = el("button", "pe-btn", "Try again");
+        button.type = "button"; button.addEventListener("click", retry);
+        ui.appendChild(button);
+      }
     });
 
     var chartEl, trendTitle, notesEl, tableWrap, tableBtn, rowsEl, sourcesEl;
@@ -525,6 +547,7 @@
     [document.documentElement, document.body].forEach(function (n) {
       if (n) watcher.observe(n, { attributes: true, attributeFilter: ["class", "data-theme", "style"] });
     });
+    root._psElecThemeObserver = watcher;
   }
 
   Array.prototype.forEach.call(document.querySelectorAll(".pselec"), initWidget);

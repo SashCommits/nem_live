@@ -330,11 +330,25 @@
   }
 
   function start(root) {
-    var api = root._hrApi;
-    root.innerHTML = '<div class="hr-status">Loading the headroom explorer\u2026</div>';
+    var api = root._hrApi, loader = window.psBatteryLoader;
+    if (loader) loader.loading(root, "Loading grid headroom…");
+    root.innerHTML = loader ? "" : '<div class="hr-status">Loading the headroom explorer\u2026</div>';
     Promise.all([api.list(), api.load("locations")])
-      .then(function (r) { build(root, r[0], (r[1] && r[1].value) || {}, api, root._hrTheme); })
-      .catch(function (e) { gate(root, e); });
+      .then(function (r) {
+        build(root, r[0], (r[1] && r[1].value) || {}, api, root._hrTheme);
+        if (loader) loader.done(root);
+      })
+      .catch(function (e) {
+        // Sign-in and plan gates are not data failures: preserve their links.
+        if (!loader || e.code === "signed_out" || e.code === "not_subscribed" ||
+            e.code === "wrong_tier") {
+          if (loader) loader.done(root);
+          gate(root, e);
+          return;
+        }
+        root.textContent = "";
+        loader.error(root, "Couldn't load grid headroom. Check your connection.", function () { start(root); });
+      });
   }
 
   function initWidget(root) {
@@ -754,13 +768,24 @@
 
     function renderDetail() {
       var id = state.sel; if (!byId.has(id)) return;
-      var p = details.get(id);
+      var p = details.get(id), detail = $("detail"), loader = window.psBatteryLoader;
       if (!p) {
-        $("detail").innerHTML = '<div class="hr-status">Loading ' + esc(nameOf(byId.get(id))) + "\u2026</div>";
-        api.point(id).then(function (r) { details.set(id, r.point); if (state.sel === id) renderDetail(); },
-          function (e) { if (state.sel === id) showError(e); });
+        if (loader) loader.loading(detail, "Loading connection point…");
+        detail.innerHTML = loader ? "" : '<div class="hr-status">Loading ' + esc(nameOf(byId.get(id))) + "\u2026</div>";
+        api.point(id).then(function (r) {
+          details.set(id, r.point);
+          if (state.sel === id) renderDetail();
+        }, function (e) {
+          if (state.sel !== id) return;
+          showError(e);
+          if (loader) loader.error(detail, "Couldn't load this connection point.", function () {
+            details.delete(id);
+            renderDetail();
+          });
+        });
         return;
       }
+      if (loader) loader.done(detail);
       var obsText = ["solar", "wind"].filter(function (t) { return p.obs[t]; }).map(function (t) {
         var o = p.obs[t];
         return t + " " + o.net.toFixed(1) + "%" + (o.farm >= 0.05 ? ' <span style="font-size:.8rem;font-weight:400">+ ' + o.farm.toFixed(1) + "% farm caps</span>" : "");
