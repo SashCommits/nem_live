@@ -1,0 +1,26 @@
+name: Data widget loading validation
+on:
+  pull_request:
+    paths:
+      - electrification-widget.js
+      - headroom-widget.js
+      - tests/test_widget_loading.py
+      - .github/workflows/widget-loading.yml
+  push:
+    branches: [main]
+    paths:
+      - electrification-widget.js
+      - headroom-widget.js
+      - tests/test_widget_loading.py
+      - .github/workflows/widget-loading.yml
+jobs:
+  widget-loading:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate published JavaScript syntax
+        run: |
+          node --check electrification-widget.js
+          node --check headroom-widget.js
+      - name: Validate loader lifecycle and subscriber gates
+        run: python3 -m unittest discover -s tests -p 'test_widget_loading.py' -v
