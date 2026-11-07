@@ -228,7 +228,6 @@
         button.type = "button"; button.addEventListener("click", retry);
         ui.appendChild(button);
       }
-      });
     });
 
     var chartEl, trendTitle, notesEl, tableWrap, tableBtn, rowsEl, sourcesEl;
