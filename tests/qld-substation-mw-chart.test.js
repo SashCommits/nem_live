@@ -86,6 +86,8 @@ async function exercise(backend, siteID='ga:82') {
   assert.equal(available.chart.attributes["data-series-state"],"available");
   const svg=available.chart.children.find(c=>c.tagName==="svg");
   assert(svg && svg.children.some(c=>c.tagName==="path"),"Verified data must draw real MW lines");
+  assert(svg.attributes["aria-label"].includes("dispatch-target"),
+    "Generic substations must not label dispatch targets as measured output");
   // The Diamondy pilot plots two separately sourced Wambo unit traces.
   const diamondy=await exercise({
     site_id:"qld-diamondy",status:"available",
@@ -97,6 +99,8 @@ async function exercise(backend, siteID='ga:82') {
       {name:"Wambo Stage 1",duid:"WAMBOWF1",mw:[100,110,120],dispatch_target_mw:[98,108,117]},
       {name:"Wambo Stage 2",duid:"WAMBOWF2",mw:[80,80,80],dispatch_target_mw:[79,82,78]}
     ],
+    complete_intervals_count:[1,0,1],
+    reporting_intervals_count:[1,1,1],
     connection_point_models:[
       {connection_point_id:"QDMW1W",status:"available",modelled_ceiling_mw:[200,210,220]},
       {connection_point_id:"QDMR1W",status:"not_invoked",modelled_ceiling_mw:[null,null,null]}
@@ -110,5 +114,9 @@ async function exercise(backend, siteID='ga:82') {
   assert(paths.some(p=>p.attributes["stroke-dasharray"]==="7 5"),
     "AEMO connection-point ceiling must be dashed and distinct");
   assert(diamondy.state.textContent.includes("Wambo units"));
+  assert(diamondySvg.attributes["aria-label"].includes("SCADA"),
+    "Diamondy chart must identify measured SCADA instead of dispatch targets");
+  assert(diamondy.state.textContent.includes("five-minute intervals lack"),
+    "Partial measurement coverage must be visible beside the chart");
   console.log("MW chart visibility, Wambo per-unit SCADA and scoped headroom drawing passed");
 })().catch(error=>{console.error(error);process.exitCode=1});
