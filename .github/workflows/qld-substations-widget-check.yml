@@ -24,7 +24,7 @@ jobs:
           node - <<'JS'
           const fs = require('node:fs');
           const text = fs.readFileSync('qld-substations-widget.js', 'utf8');
-          for (const required of ['data-qld-substations', '/api/substations', 'substation', 'site.voltage_kv', 'site.status', 'feature_subtype', 'window.location.assign']) {
+          for (const required of ['data-qld-substations', '/api/substations', 'substation', 'site.voltage_kv', 'site.status', 'feature_subtype', 'window.history.pushState']) {
             if (!text.includes(required)) throw Error('Missing expected map feature: ' + required);
           }
           if (/\.innerHTML\s*=\s*[^;]+site\./.test(text)) throw Error('Potential unsafe GA HTML insertion');

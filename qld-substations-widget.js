@@ -43,17 +43,28 @@
     var d = new Date(n);
     return isNaN(d.getTime()) ? "Not recorded" : d.toLocaleDateString("en-AU", { year: "numeric", month: "short", day: "numeric" });
   }
+  // Ghost serves one real page at /headroom-explorer/. Individual GA
+  // substations are client-side views of that page, not separate Ghost pages.
+  // Store their IDs in a URL fragment so refresh never requires a second
+  // Ghost route or a query-string redirect.
   function pageUrl(id) {
     var u = new URL(window.location.href);
-    u.searchParams.set("substation", id);
-    u.hash = "";
+    u.searchParams.delete("substation"); // legacy links remain readable
+    u.hash = "ps-substation=" + encodeURIComponent(id);
     return u.toString();
   }
   function mapUrl() {
     var u = new URL(window.location.href);
     u.searchParams.delete("substation");
-    u.hash = "";
+    if (u.hash.indexOf("#ps-substation=") === 0) u.hash = "";
     return u.toString();
+  }
+  function routeSubstation() {
+    var hash = window.location.hash || "";
+    if (hash.indexOf("#ps-substation=") === 0) {
+      return new URLSearchParams(hash.slice(1)).get("ps-substation");
+    }
+    return new URLSearchParams(window.location.search).get("substation");
   }
 
   var css = [
@@ -146,7 +157,45 @@
     return window.__psSharedMapCorePromise;
   }
   function startQueenslandMap(maps) {
-  var state = { records: [], map: null, lib: null, markers: [], mapPending: false };
+  var state = { records: [], map: null, detailMap: null, lib: null, markers: [], mapPending: false };
+  var loadedMeta = null, currentViewId;
+  function teardownMaps() {
+    // Remove detached map canvases when changing views repeatedly.
+    if (state.map) { state.map.remove(); state.map = null; }
+    if (state.detailMap) { state.detailMap.remove(); state.detailMap = null; }
+    state.lib = null;
+    state.markers = [];
+  }
+  function showCurrentRoute() {
+    if (!loadedMeta) return;
+    var id = routeSubstation();
+    if (id === currentViewId) return;
+    currentViewId = id;
+    teardownMaps();
+    if (!id) { showMap(loadedMeta); return; }
+    var site = state.records.find(function (item) { return item.id === id; });
+    if (!site) {
+      source.hidden = true;
+      wrap.replaceChildren();
+      var missing = el("div", "ps-qs__error");
+      missing.appendChild(el("h3", "", "Substation record not found"));
+      var home = el("a", "", "Return to Queensland map");
+      home.href = mapUrl();
+      home.onclick = function (event) { event.preventDefault(); navigate(null); };
+      missing.appendChild(home);
+      wrap.appendChild(missing);
+      return;
+    }
+    showDetail(site, loadedMeta);
+  }
+  function navigate(id) {
+    var target = id ? pageUrl(id) : mapUrl();
+    // No full-page request: Ghost keeps serving the same page. Browser
+    // Back, Forward and copied deep links still work.
+    window.history.pushState({ psSubstation: id || null }, "", target);
+    showCurrentRoute();
+    wrap.scrollIntoView({ block: "start" });
+  }
   function createMarker(site, map, lib, size, navigate) {
     var point = maps.marker(lib, site.latitude, site.longitude,
       COLORS[lifecycle(site.status)], size);
@@ -173,12 +222,12 @@
     element.addEventListener("focus", showPopup);
     element.addEventListener("blur", hidePopup);
     element.addEventListener("click", function () {
-      if (navigate) window.location.assign(pageUrl(site.id));
+      if (navigate) navigate(site.id);
     });
     element.addEventListener("keydown", function (event) {
       if ((event.key === "Enter" || event.key === " ") && navigate) {
         event.preventDefault();
-        window.location.assign(pageUrl(site.id));
+        navigate(site.id);
       }
     });
     return {
@@ -375,7 +424,7 @@
     wrap.appendChild(block);
     var back = el("button", "ps-qs__back", "← Back to Queensland map");
     back.type = "button";
-    back.onclick = function () { window.location.assign(mapUrl()); };
+    back.onclick = function () { navigate(null); };
     block.appendChild(back);
     var head = el("header", "ps-qs__head");
     var titlebox = el("div");
@@ -425,10 +474,12 @@
     sourceP.appendChild(sourceLink);
     block.appendChild(sourceP);
     maps.create(smallMap, { center: [site.longitude, site.latitude], zoom: 12 }).then(function (result) {
+      if (!smallMap.isConnected) { result.map.remove(); return; }
+      state.detailMap = result.map;
       createMarker(site, result.map, result.lib, 18, false);
       result.map.resize();
     }).catch(function () {
-      smallMap.textContent = "Map could not be loaded. Coordinates are listed below.";
+      if (smallMap.isConnected) smallMap.textContent = "Map could not be loaded. Coordinates are listed below.";
     });
   }
 
@@ -529,7 +580,7 @@
         t.appendChild(el("span", "", s.name));
         t.appendChild(el("small", "", toText(s.locality) + " · " + toText(s.voltage_kv, "Unknown") + " kV · GA #" + s.ga_objectid));
         button.appendChild(t);
-        button.onclick = function () { window.location.assign(pageUrl(s.id)); };
+        button.onclick = function () { navigate(s.id); };
         results.appendChild(button);
       });
       if (records.length > 80) results.appendChild(el("p", "ps-qs__count", "Showing the first 80 names. Search or filter to narrow results."));
@@ -545,18 +596,29 @@
     });
 
     maps.create(mapNode, { center: [145.5, -21.3], zoom: 5.25 }).then(function (result) {
+      if (!mapNode.isConnected) { result.map.remove(); return; }
       state.lib = result.lib;
       state.map = result.map;
       render();
       state.map.resize();
     }).catch(function () {
-      mapNode.textContent = "Map could not be loaded. The searchable substation list remains available below.";
-      render();
+      if (mapNode.isConnected) {
+        mapNode.textContent = "Map could not be loaded. The searchable substation list remains available below.";
+        render();
+      }
     });
     render();
   }
 
-  var activeID = new URLSearchParams(window.location.search).get("substation");
+  // Recognise existing ?substation=ga:82 links, then replace just the
+  // client-side URL with the canonical #ps-substation=ga%3A82 form.
+  // This avoids another network navigation even for old bookmarked URLs.
+  var oldId = new URLSearchParams(window.location.search).get("substation");
+  if (oldId && /^ga:[0-9]+$/.test(oldId) && !window.location.hash.startsWith("#ps-substation=")) {
+    window.history.replaceState(null, "", pageUrl(oldId));
+  }
+  window.addEventListener("popstate", showCurrentRoute);
+  window.addEventListener("hashchange", showCurrentRoute);
   var loading = el("p", "ps-qs__intro", "Loading Queensland substation records from Geoscience Australia…");
   wrap.appendChild(loading);
   fetch(apiBase + "/api/substations", { cache: "default" })
@@ -564,20 +626,8 @@
     .then(function (meta) {
       if (!meta || !Array.isArray(meta.sites)) throw Error("Invalid substation response");
       state.records = meta.sites;
-      var site = state.records.find(function (r) { return r.id === activeID; });
-      if (activeID && !site) {
-        wrap.replaceChildren();
-        var missing = el("div", "ps-qs__error");
-        missing.appendChild(el("h3", "", "Substation record not found"));
-        var home = el("a", "", "Return to Queensland map");
-        home.href = mapUrl();
-        missing.appendChild(home);
-        wrap.appendChild(missing);
-        source.hidden = true;
-        return;
-      }
-      if (site) showDetail(site, meta);
-      else showMap(meta);
+      loadedMeta = meta;
+      showCurrentRoute();
     })
     .catch(function () {
       wrap.replaceChildren();
