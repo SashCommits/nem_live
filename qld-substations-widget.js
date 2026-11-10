@@ -74,8 +74,9 @@
     ".ps-qs__legend-item{display:inline-flex;align-items:center;gap:.35rem}",
     ".ps-qs__swatch{width:.7rem;height:.7rem;border-radius:50%;display:inline-block}",
     ".ps-qs__map{height:min(64vh,600px);min-height:370px;border:1px solid var(--qs-rule);border-radius:5px;background:#e8ece9;overflow:hidden;position:relative}",
-    ".ps-qs__map .leaflet-container{font-family:inherit}",
-    ".ps-qs__map .leaflet-control-attribution{font-size:10px}",
+    ".ps-qs__map .maplibregl-map{font-family:inherit}",
+    ".ps-qs__map .maplibregl-ctrl-attrib{font-size:10px}",
+    ".ps-qs__map .maplibregl-popup-content{color:#222;font-size:.84rem;line-height:1.45}",
     ".ps-qs__count{font-size:.83rem;opacity:.8;margin:.65rem 0}",
     ".ps-qs__results{max-height:15rem;overflow:auto;border-top:1px solid var(--qs-rule);display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}",
     ".ps-qs__item{font:inherit;cursor:pointer;text-align:left;color:inherit;border:0;border-bottom:1px solid var(--qs-rule);background:transparent;padding:.7rem .5rem;display:flex;gap:.45rem;align-items:center}",
@@ -107,30 +108,54 @@
   wrap.setAttribute("aria-label", "Queensland substations");
   source.parentNode.insertBefore(wrap, source);
 
-  var leafP;
-  function loadLeaflet() {
-    if (window.L) return Promise.resolve(window.L);
-    if (leafP) return leafP;
-    leafP = new Promise(function (resolve, reject) {
-      var link = el("link");
-      link.rel = "stylesheet";
-      link.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
-      document.head.appendChild(link);
-      var script = el("script");
-      script.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
-      script.onload = function () { resolve(window.L); };
-      script.onerror = function () { reject(new Error("Couldn't load the map library")); };
-      document.head.appendChild(script);
+  // Shared site basemap. Any map added elsewhere should use the same module.
+  var maps = window.PowerSocketMaps;
+  if (!maps) {
+    wrap.replaceChildren();
+    wrap.appendChild(el("p", "ps-qs__error",
+      "Queensland map module is unavailable; the existing Headroom Explorer remains accessible below."));
+    return;
+  }
+  var state = { records: [], map: null, lib: null, markers: [], mapPending: false };
+  function createMarker(site, map, lib, size, navigate) {
+    var point = maps.marker(lib, site.latitude, site.longitude,
+      COLORS[lifecycle(site.status)], size);
+    point.marker.addTo(map);
+    var element = point.element;
+    element.setAttribute("role", "button");
+    element.setAttribute("tabindex", "0");
+    element.setAttribute("aria-label", site.name + " — " +
+      toText(site.voltage_kv) + " kV, " + toText(site.status));
+    var popup;
+    function showPopup() {
+      if (popup) return;
+      var content = el("div");
+      content.appendChild(el("strong", "", site.name));
+      content.appendChild(el("div", "", "Voltage: " + toText(site.voltage_kv) + " kV"));
+      content.appendChild(el("div", "", "Status: " + toText(site.status)));
+      content.appendChild(el("div", "", "GA feature #" + site.ga_objectid));
+      popup = new lib.Popup({ closeButton: false, closeOnClick: false, offset: 11 })
+        .setLngLat([site.longitude, site.latitude]).setDOMContent(content).addTo(map);
+    }
+    function hidePopup() { if (popup) { popup.remove(); popup = null; } }
+    element.addEventListener("mouseenter", showPopup);
+    element.addEventListener("mouseleave", hidePopup);
+    element.addEventListener("focus", showPopup);
+    element.addEventListener("blur", hidePopup);
+    element.addEventListener("click", function () {
+      if (navigate) window.location.assign(pageUrl(site.id));
     });
-    return leafP;
+    element.addEventListener("keydown", function (event) {
+      if ((event.key === "Enter" || event.key === " ") && navigate) {
+        event.preventDefault();
+        window.location.assign(pageUrl(site.id));
+      }
+    });
+    return {
+      remove: function () { hidePopup(); point.marker.remove(); }
+    };
   }
-  function addTiles(L, map) {
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-      maxZoom: 18,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-    }).addTo(map);
-  }
-  var state = { records: [], L: null, map: null, markers: null, mapPending: false };
+
   function fact(label, value, container) {
     container.appendChild(el("dt", "", label));
     container.appendChild(el("dd", "", value));
@@ -190,15 +215,12 @@
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
     block.appendChild(sourceP);
-    loadLeaflet().then(function (L) {
-      var map = L.map(smallMap, { scrollWheelZoom: false }).setView([site.latitude, site.longitude], 12);
-      addTiles(L, map);
-      L.circleMarker([site.latitude, site.longitude], {
-        radius: 9, color: "#fff", weight: 2,
-        fillColor: COLORS[lifecycle(site.status)], fillOpacity: .95
-      }).addTo(map);
-      setTimeout(function () { map.invalidateSize(); }, 0);
-    }).catch(function () { smallMap.textContent = "Map tiles could not be loaded. Coordinates are listed below."; });
+    maps.create(smallMap, { center: [site.longitude, site.latitude], zoom: 12 }).then(function (result) {
+      createMarker(site, result.map, result.lib, 18, false);
+      result.map.resize();
+    }).catch(function () {
+      smallMap.textContent = "Map could not be loaded. Coordinates are listed below.";
+    });
   }
 
   function showMap(meta) {
@@ -302,20 +324,10 @@
         results.appendChild(button);
       });
       if (records.length > 80) results.appendChild(el("p", "ps-qs__count", "Showing the first 80 names. Search or filter to narrow results."));
-      if (state.map && state.markers) {
-        state.markers.clearLayers();
-        records.forEach(function (s) {
-          var marker = state.L.circleMarker([s.latitude,s.longitude], {
-            radius: 6, color: "#fff", weight: 1.6,
-            fillColor: COLORS[lifecycle(s.status)], fillOpacity: .95
-          }).addTo(state.markers);
-          var tip = el("div");
-          tip.appendChild(el("strong", "", s.name));
-          tip.appendChild(el("div", "", "Voltage: " + toText(s.voltage_kv, "Unknown") + " kV"));
-          tip.appendChild(el("div", "", "Status: " + toText(s.status)));
-          tip.appendChild(el("div", "", "GA feature #" + s.ga_objectid));
-          marker.bindTooltip(tip, { direction: "top", opacity: .97 });
-          marker.on("click", function () { window.location.assign(pageUrl(s.id)); });
+      if (state.map && state.lib) {
+        state.markers.forEach(function (marker) { marker.remove(); });
+        state.markers = records.map(function (site) {
+          return createMarker(site, state.map, state.lib, 12, true);
         });
       }
     }
@@ -323,15 +335,13 @@
       node.addEventListener(node === search ? "input" : "change", render);
     });
 
-    loadLeaflet().then(function (L) {
-      state.L = L;
-      state.map = L.map(mapNode, { scrollWheelZoom:false, zoomSnap:.25 }).setView([-21.3,145.5],5.25);
-      addTiles(L, state.map);
-      state.markers = L.layerGroup().addTo(state.map);
+    maps.create(mapNode, { center: [145.5, -21.3], zoom: 5.25 }).then(function (result) {
+      state.lib = result.lib;
+      state.map = result.map;
       render();
-      setTimeout(function () { state.map.invalidateSize(); }, 0);
+      state.map.resize();
     }).catch(function () {
-      mapNode.textContent = "Map tiles could not be loaded. The searchable substation list remains available below.";
+      mapNode.textContent = "Map could not be loaded. The searchable substation list remains available below.";
       render();
     });
     render();
