@@ -214,7 +214,7 @@
       content.appendChild(el("strong", "", site.name));
       content.appendChild(el("div", "", "Voltage: " + toText(site.voltage_kv) + " kV"));
       content.appendChild(el("div", "", "Status: " + toText(site.status)));
-      content.appendChild(el("div", "", "GA feature #" + site.ga_objectid));
+      content.appendChild(el("div", "", site.ga_objectid == null ? "Powerlink-documented pilot" : "GA feature #" + site.ga_objectid));
       popup = new lib.Popup({ closeButton: false, closeOnClick: false, offset: 11 })
         .setLngLat([site.longitude, site.latitude]).setDOMContent(content).addTo(map);
     }
@@ -254,8 +254,11 @@
     hdr.appendChild(el("h3", "", "Network capacity and generation over time"));
     var period = el("select", "ps-qs__mw-period");
     period.setAttribute("aria-label", "MW chart period");
-    [["5m","Latest day · 5-minute"], ["1h","Latest 31 days · hourly"],
-      ["1d","Latest year · daily"]].forEach(function (pair) {
+    (site.id === "qld-diamondy"
+      ? [["5m","Latest archive day · 5-minute"], ["1h","Archive month · hourly"],
+          ["1d","Archive month · daily"]]
+      : [["5m","Latest day · 5-minute"], ["1h","Latest 31 days · hourly"],
+          ["1d","Latest year · daily"]]).forEach(function (pair) {
       var opt = el("option", "", pair[1]);
       opt.value = pair[0];
       if (pair[0] === "1h") opt.selected = true;
@@ -264,9 +267,14 @@
     hdr.appendChild(period);
     panel.appendChild(hdr);
     panel.appendChild(el("p", "ps-qs__mw-description",
-      "Network injection ceiling (modelled), actual net injection and the contributions of individual connected assets — in MW over time."));
+      site.id === "qld-diamondy"
+      ? "Real five-minute AEMO SCADA observations for Wambo Stage 1 and Stage 2, their reported-unit sum, and any independently modelled connection-point constraint ceilings. No unverified substation-wide limit is shown."
+      : "Time-varying modelled network headroom and connection-point injection, where verified — MW over time."));
     var legend = el("div", "ps-qs__mw-legend");
-    [["#D63F47","Modelled network injection ceiling"], ["#48AC57","Actual net injection"]]
+    (site.id === "qld-diamondy"
+      ? [["#D63F47","Per-connection-point constraint ceiling (if available; not a station rating)"],
+         ["#48AC57","Sum of reporting Wambo DUID SCADA readings"]]
+      : [["#D63F47","Modelled network injection ceiling"], ["#48AC57","Dispatch-target net injection"]])
       .forEach(function (pair) {
         var item = el("span","ps-qs__mw-label");
         var swatch = el("i","ps-qs__mw-swatch");
@@ -281,8 +289,9 @@
     panel.appendChild(chartBox);
     var assets = el("div", "ps-qs__mw-assets");
     panel.appendChild(assets);
-    panel.appendChild(el("p", "ps-qs__mw-footnote",
-      "The red curve is a modelled, time-varying connection-point injection ceiling — not an approved export limit or permanent substation rating. Green is net injection (negative values mean withdrawal). Missing data where no network limit was invoked must not be interpreted as zero headroom. NEM time (AEST)."));
+    panel.appendChild(el("p", "ps-qs__mw-footnote", site.id === "qld-diamondy"
+      ? "Source: AEMO DISPATCH_UNIT_SCADA instantaneous MW readings (not MWh or revenue meter data) and DISPATCHLOAD dispatch targets. All times NEM AEST. The green sum includes only reporting Wambo units; a missing unit is not zero. Any dashed red network ceilings apply to separate AEMO connection points and cannot be combined into a Diamondy substation limit."
+      : "Red is a modelled single-connection-point ceiling, not an approved export limit or permanent substation rating. Net injection derived from DISPATCHLOAD is a dispatch target, not measured output. Missing modelled limits do not mean zero or unlimited capacity. NEM time (AEST)."));
     var colors = ["#235D97","#9160C1","#DC9828","#39867E","#A66B4C","#7D8D37"];
     var busy = 0;
 
@@ -328,7 +337,8 @@
       var t = response.timestamps_aest || [];
       var lines = [
         {name:"Modelled injection ceiling", color:"#D63F47", v:response.modelled_ceiling_mw},
-        {name:"Actual net injection", color:"#48AC57", v:response.observed_injection_mw}
+        {name:site.id === "qld-diamondy" ? "Sum of reporting Wambo DUID SCADA readings" : "Dispatch-target net injection",
+          color:"#48AC57", v:response.observed_injection_mw}
       ];
       (response.assets || []).forEach(function (a, idx) {
         if (Array.isArray(a.mw) && a.mw.length === t.length) {
@@ -340,13 +350,29 @@
           legend.appendChild(item);
         }
       });
+      // Network constraint ceilings are individual AEMO connection-point
+      // models, never a summed physical Diamondy substation limit.
+      (response.connection_point_models || []).forEach(function (cp, idx) {
+        if (!Array.isArray(cp.modelled_ceiling_mw) ||
+            cp.modelled_ceiling_mw.length !== t.length ||
+            !cp.modelled_ceiling_mw.some(function (v) { return typeof v === "number"; })) return;
+        var label = "CP " + cp.connection_point_id + " ceiling (modelled)";
+        var color = idx % 2 ? "#C46D77" : "#D63F47";
+        lines.push({name:label, color:color, v:cp.modelled_ceiling_mw, dashed:true});
+        var item = el("span", "ps-qs__mw-label");
+        var swatch = el("i", "ps-qs__mw-swatch"); swatch.style.background=color;
+        item.appendChild(swatch); item.appendChild(el("span", "", label));
+        legend.appendChild(item);
+      });
       var values = [];
       lines.forEach(function (line) {
         if (!Array.isArray(line.v) || line.v.length !== t.length) return;
         line.v.forEach(function (x) { if (typeof x === "number" && Number.isFinite(x)) values.push(x); });
       });
       if (t.length < 2 || !values.length) {
-        drawEmptyChart("No modelled network constraint was invoked in this time window; this is not evidence of zero or unlimited capacity.");
+        drawEmptyChart(site.id === "qld-diamondy"
+          ? "No Wambo SCADA observations are available in this time window."
+          : "No modelled network constraint was invoked in this time window; this is not evidence of zero or unlimited capacity.");
         return;
       }
       var width = 900, height = 342, left = 61, top = 19, right = 18, bottom = 49;
@@ -361,7 +387,9 @@
       var svg=document.createElementNS(ns,"svg");
       svg.setAttribute("viewBox","0 0 "+width+" "+height);
       svg.setAttribute("role","img");
-      svg.setAttribute("aria-label","MW over time: modelled injection ceiling, actual net injection, and verified individual assets");
+      svg.setAttribute("aria-label",site.id === "qld-diamondy"
+          ? "Wambo five-minute SCADA-observed MW, reported DUID total, and any separately modelled connection-point ceilings"
+          : "MW over time: modelled network injection ceiling and dispatch-target injection, not observed SCADA output");
       svg.style.cssText="width:100%;height:auto;display:block;min-height:235px";
       function sv(tag, attrs, textValue) {
         var e=document.createElementNS(ns,tag);
@@ -392,7 +420,8 @@
         });
         if(path){ sv("path",{d:path,fill:"none",stroke:line.color,
           "stroke-width":line===lines[0]?2.9:2.25,
-          "stroke-linecap":"round","stroke-linejoin":"round"}); anyDrawn=true; }
+          "stroke-linecap":"round","stroke-linejoin":"round",
+          "stroke-dasharray":line.dashed?"7 5":""}); anyDrawn=true; }
       });
       if(!anyDrawn) return;
       var guide=sv("line",{x1:left,y1:top,x2:left,y2:height-bottom,stroke:"currentColor",
@@ -441,12 +470,26 @@
           assets.textContent="Asset contributions (blue, orange and other lines) are not yet available. Each asset needs verified electrical connection and historical DUID output.";
           return;
         }
-        status.textContent="AEMO connection point: "+(response.connection_point_label||response.aemo_connection_point_ids[0])+
-          " · "+response.start+" to "+response.end+".";
+        status.textContent = site.id === "qld-diamondy"
+          ? "Verified source: AEMO SCADA for Wambo units · " + response.start + " to " + response.end +
+            " (AEST). Reporting units vary by interval; no site-wide rated limit is inferred."
+          : "AEMO connection point: " + (response.connection_point_label ||
+              (response.aemo_connection_point_ids || [])[0] || "Unknown") +
+            " · " + response.start + " to " + response.end + ".";
+        if (site.id === "qld-diamondy" &&
+            Array.isArray(response.complete_intervals_count) &&
+            Array.isArray(response.reporting_intervals_count)) {
+          var missing = response.complete_intervals_count.some(function (n, i) {
+            return n < response.reporting_intervals_count[i];
+          });
+          if (missing) status.textContent += " Some five-minute intervals lack one or more Wambo DUID readings; the green line sums only available readings.";
+        }
         chartSvg(response);
         assets.textContent=(response.assets||[]).length
-          ? "Individual asset MW series shown where verified."
-          : "Individual-asset MW traces are not available yet: the current history stores connection-point totals, not per-DUID output.";
+          ? (site.id === "qld-diamondy"
+            ? "Blue/purple: actual SCADA-observed MW per Wambo DUID. Green: sum of whichever Wambo units reported, not all injection through Diamondy. The SCADA archive and dispatch targets are independently retained for QA."
+            : "Individual DUID series shown where verified.")
+          : "Individual-asset MW traces not available until historical unit readings and electrical relationships are verified.";
       }).catch(function(err) {
         if(revision!==busy || !panel.isConnected)return;
         drawEmptyChart(err&&err.message?err.message:"MW series temporarily unavailable.");
@@ -468,7 +511,9 @@
     var head = el("header", "ps-qs__head");
     var titlebox = el("div");
     titlebox.appendChild(el("h2", "", site.name));
-    titlebox.appendChild(el("p", "ps-qs__intro", "Queensland substation · Geoscience Australia infrastructure record"));
+    titlebox.appendChild(el("p", "ps-qs__intro", site.source_kind === "powerlink_supplemental"
+      ? "Powerlink-documented connection site · approximate location · AEMO unit MW history"
+      : "Queensland substation · Geoscience Australia infrastructure record"));
     head.appendChild(titlebox);
     block.appendChild(head);
 
@@ -492,7 +537,8 @@
     smallMap.setAttribute("aria-label", "Substation geographic location");
     block.appendChild(smallMap);
     var facts = el("dl", "ps-qs__facts");
-    fact("GA record ID", toText(site.ga_objectid), facts);
+    if (site.ga_objectid != null) fact("GA record ID", String(site.ga_objectid), facts);
+    else fact("Site record", toText(site.id) + " · Powerlink supplemental (not in GA)", facts);
     fact("Latitude", site.latitude.toFixed(6), facts);
     fact("Longitude", site.longitude.toFixed(6), facts);
     fact("Feature category", toText(site.feature_type), facts);
@@ -503,11 +549,15 @@
     fact("Last edited (GA)", readDate(site.last_edited_on), facts);
     block.appendChild(facts);
 
-    var notice = el("p", "ps-qs__note", "Substation locations and statuses are displayed as provided by Geoscience Australia. Some features are distribution substations. A GA feature is not proof of Powerlink ownership. Headroom calculations have not yet been assigned to physical substation records.");
+    var notice = el("p", "ps-qs__note", site.source_kind === "powerlink_supplemental"
+      ? "Diamondy is documented by Powerlink as Wambo's connection site. This pin is an approximate user-supplied location, not a surveyed switching yard. SCADA reflects instantaneous DUID output, not settlement metering. We do not add independent connection-point headroom estimates to claim substation capacity."
+      : "Substation locations and statuses are displayed as provided by Geoscience Australia. Some features are distribution substations. A GA feature is not proof of Powerlink ownership. Headroom calculations have not yet been assigned to physical substation records.");
     block.appendChild(notice);
     var sourceP = el("p", "ps-qs__source");
-    var sourceLink = el("a", "", "Source: Geoscience Australia, Electricity Infrastructure (CC BY 4.0)");
-    sourceLink.href = meta.source_url;
+    var sourceLink = el("a", "", site.source_kind === "powerlink_supplemental"
+      ? "Source: Powerlink Wambo Wind Farm Connection Project"
+      : "Source: Geoscience Australia, Electricity Infrastructure (CC BY 4.0)");
+    sourceLink.href = site.source_url || meta.source_url;
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
@@ -587,12 +637,12 @@
     results.setAttribute("aria-label", "List of displayed substations");
     wrap.appendChild(results);
     var sourceP = el("p", "ps-qs__source");
-    var sourceLink = el("a", "", "Data: Geoscience Australia (2026), CC BY 4.0");
+    var sourceLink = el("a", "", "Map: Geoscience Australia (2026), CC BY 4.0");
     sourceLink.href = meta.source_url;
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
-    sourceP.appendChild(document.createTextNode(" · Records are shown as published; duplicate names are not merged. Non-zone does not establish Powerlink ownership."));
+    sourceP.appendChild(document.createTextNode(" · GA records are kept separate from the independently sourced Diamondy pilot. Non-zone does not establish Powerlink ownership."));
     wrap.appendChild(sourceP);
 
     function filtered() {
@@ -606,7 +656,9 @@
     }
     function render() {
       var records = filtered();
-      count.textContent = records.length + " of " + state.records.length + " GA Queensland substation records shown";
+      count.textContent = records.length + " of " + state.records.length +
+        " Queensland map records shown (" + meta.sites.length + " GA + " +
+        (meta.supplemental_sites || []).length + " supplemental)";
       results.replaceChildren();
       records.slice().sort(function (a,b) {
         return String(a.name).localeCompare(String(b.name)) || Number(a.ga_objectid) - Number(b.ga_objectid);
@@ -617,7 +669,7 @@
         button.appendChild(sw);
         var t = el("span");
         t.appendChild(el("span", "", s.name));
-        t.appendChild(el("small", "", toText(s.locality) + " · " + toText(s.voltage_kv, "Unknown") + " kV · GA #" + s.ga_objectid));
+        t.appendChild(el("small", "", toText(s.locality) + " · " + toText(s.voltage_kv, "Unknown") + " kV · " + (s.ga_objectid == null ? "Powerlink pilot" : "GA #" + s.ga_objectid)));
         button.appendChild(t);
         button.onclick = function () { navigate(s.id); };
         results.appendChild(button);
@@ -664,7 +716,8 @@
     .then(function (response) { if (!response.ok) throw Error("GIS source unavailable"); return response.json(); })
     .then(function (meta) {
       if (!meta || !Array.isArray(meta.sites)) throw Error("Invalid substation response");
-      state.records = meta.sites;
+      // GA remains intact; Diamondy is explicitly a Powerlink-sourced pilot.
+      state.records = meta.sites.concat(meta.supplemental_sites || []);
       loadedMeta = meta;
       showCurrentRoute();
     })
