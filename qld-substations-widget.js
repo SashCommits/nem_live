@@ -214,7 +214,7 @@
       content.appendChild(el("strong", "", site.name));
       content.appendChild(el("div", "", "Voltage: " + toText(site.voltage_kv) + " kV"));
       content.appendChild(el("div", "", "Status: " + toText(site.status)));
-      content.appendChild(el("div", "", "GA feature #" + site.ga_objectid));
+      content.appendChild(el("div", "", site.ga_objectid == null ? "Powerlink-documented pilot" : "GA feature #" + site.ga_objectid));
       popup = new lib.Popup({ closeButton: false, closeOnClick: false, offset: 11 })
         .setLngLat([site.longitude, site.latitude]).setDOMContent(content).addTo(map);
     }
@@ -468,7 +468,9 @@
     var head = el("header", "ps-qs__head");
     var titlebox = el("div");
     titlebox.appendChild(el("h2", "", site.name));
-    titlebox.appendChild(el("p", "ps-qs__intro", "Queensland substation · Geoscience Australia infrastructure record"));
+    titlebox.appendChild(el("p", "ps-qs__intro", site.source_kind === "powerlink_supplemental"
+      ? "Powerlink-documented connection site · approximate location · AEMO unit MW history"
+      : "Queensland substation · Geoscience Australia infrastructure record"));
     head.appendChild(titlebox);
     block.appendChild(head);
 
@@ -492,7 +494,8 @@
     smallMap.setAttribute("aria-label", "Substation geographic location");
     block.appendChild(smallMap);
     var facts = el("dl", "ps-qs__facts");
-    fact("GA record ID", toText(site.ga_objectid), facts);
+    if (site.ga_objectid != null) fact("GA record ID", String(site.ga_objectid), facts);
+    else fact("Site record", toText(site.id) + " · Powerlink supplemental (not in GA)", facts);
     fact("Latitude", site.latitude.toFixed(6), facts);
     fact("Longitude", site.longitude.toFixed(6), facts);
     fact("Feature category", toText(site.feature_type), facts);
@@ -503,11 +506,15 @@
     fact("Last edited (GA)", readDate(site.last_edited_on), facts);
     block.appendChild(facts);
 
-    var notice = el("p", "ps-qs__note", "Substation locations and statuses are displayed as provided by Geoscience Australia. Some features are distribution substations. A GA feature is not proof of Powerlink ownership. Headroom calculations have not yet been assigned to physical substation records.");
+    var notice = el("p", "ps-qs__note", site.source_kind === "powerlink_supplemental"
+      ? "Diamondy is documented by Powerlink as Wambo's connection site. This pin is an approximate user-supplied location, not a surveyed switching yard. SCADA reflects instantaneous DUID output, not settlement metering. We do not add independent connection-point headroom estimates to claim substation capacity."
+      : "Substation locations and statuses are displayed as provided by Geoscience Australia. Some features are distribution substations. A GA feature is not proof of Powerlink ownership. Headroom calculations have not yet been assigned to physical substation records.");
     block.appendChild(notice);
     var sourceP = el("p", "ps-qs__source");
-    var sourceLink = el("a", "", "Source: Geoscience Australia, Electricity Infrastructure (CC BY 4.0)");
-    sourceLink.href = meta.source_url;
+    var sourceLink = el("a", "", site.source_kind === "powerlink_supplemental"
+      ? "Source: Powerlink Wambo Wind Farm Connection Project"
+      : "Source: Geoscience Australia, Electricity Infrastructure (CC BY 4.0)");
+    sourceLink.href = site.source_url || meta.source_url;
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
@@ -587,12 +594,12 @@
     results.setAttribute("aria-label", "List of displayed substations");
     wrap.appendChild(results);
     var sourceP = el("p", "ps-qs__source");
-    var sourceLink = el("a", "", "Data: Geoscience Australia (2026), CC BY 4.0");
+    var sourceLink = el("a", "", "Map: Geoscience Australia (2026), CC BY 4.0");
     sourceLink.href = meta.source_url;
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
-    sourceP.appendChild(document.createTextNode(" · Records are shown as published; duplicate names are not merged. Non-zone does not establish Powerlink ownership."));
+    sourceP.appendChild(document.createTextNode(" · GA records are kept separate from the independently sourced Diamondy pilot. Non-zone does not establish Powerlink ownership."));
     wrap.appendChild(sourceP);
 
     function filtered() {
@@ -606,7 +613,9 @@
     }
     function render() {
       var records = filtered();
-      count.textContent = records.length + " of " + state.records.length + " GA Queensland substation records shown";
+      count.textContent = records.length + " of " + state.records.length +
+        " Queensland map records shown (" + meta.sites.length + " GA + " +
+        (meta.supplemental_sites || []).length + " supplemental)";
       results.replaceChildren();
       records.slice().sort(function (a,b) {
         return String(a.name).localeCompare(String(b.name)) || Number(a.ga_objectid) - Number(b.ga_objectid);
@@ -617,7 +626,7 @@
         button.appendChild(sw);
         var t = el("span");
         t.appendChild(el("span", "", s.name));
-        t.appendChild(el("small", "", toText(s.locality) + " · " + toText(s.voltage_kv, "Unknown") + " kV · GA #" + s.ga_objectid));
+        t.appendChild(el("small", "", toText(s.locality) + " · " + toText(s.voltage_kv, "Unknown") + " kV · " + (s.ga_objectid == null ? "Powerlink pilot" : "GA #" + s.ga_objectid)));
         button.appendChild(t);
         button.onclick = function () { navigate(s.id); };
         results.appendChild(button);
@@ -664,7 +673,8 @@
     .then(function (response) { if (!response.ok) throw Error("GIS source unavailable"); return response.json(); })
     .then(function (meta) {
       if (!meta || !Array.isArray(meta.sites)) throw Error("Invalid substation response");
-      state.records = meta.sites;
+      // GA remains intact; Diamondy is explicitly a Powerlink-sourced pilot.
+      state.records = meta.sites.concat(meta.supplemental_sites || []);
       loadedMeta = meta;
       showCurrentRoute();
     })
