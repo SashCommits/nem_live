@@ -1,0 +1,25 @@
+name: Queensland substation refresh and deep-link tests
+
+on:
+  pull_request:
+    paths:
+      - qld-substations-widget.js
+      - tests/qld-substation-route.test.js
+      - .github/workflows/qld-substation-route-check.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check JavaScript syntax
+        run: node --check qld-substations-widget.js
+      - name: Check refresh-safe substation route, legacy links, and SPA navigation
+        run: node tests/qld-substation-route.test.js
