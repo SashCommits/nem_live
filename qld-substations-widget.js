@@ -114,7 +114,9 @@
     ".ps-qs__mw-label{display:inline-flex;align-items:center;gap:.35rem}",
     ".ps-qs__mw-swatch{width:1.25rem;height:3px;display:inline-block;border-radius:2px}",
     ".ps-qs__mw-message,.ps-qs__mw-assets{font-size:.86rem;margin:.7rem 0}",
-    ".ps-qs__mw-chart{overflow:hidden;position:relative}",
+    ".ps-qs__mw-chart{overflow:hidden;position:relative;min-height:235px}",
+    ".ps-qs__mw-empty-svg{width:100%;height:auto;display:block;min-height:235px;border:1px solid var(--qs-rule);border-radius:3px}",
+
     ".ps-qs__mw-hover{font-size:.75rem;opacity:.8;min-height:1rem;padding:.3rem 0}",
     ".ps-qs__error{padding:1rem;border:1px solid var(--qs-rule)}",
     "@media(max-width:620px){.ps-qs__map{height:470px;min-height:300px}.ps-qs__facts{grid-template-columns:1fr}.ps-qs__facts dt{margin-top:.35rem}}"
@@ -283,8 +285,46 @@
       "The red curve is a modelled, time-varying connection-point injection ceiling — not an approved export limit or permanent substation rating. Green is net injection (negative values mean withdrawal). Missing data where no network limit was invoked must not be interpreted as zero headroom. NEM time (AEST)."));
     var colors = ["#235D97","#9160C1","#DC9828","#39867E","#A66B4C","#7D8D37"];
     var busy = 0;
+
+    // Always reserve an actual chart canvas. A data-integrity gate must not
+    // turn the promised MW graph into invisible whitespace.
+    // No measurement lines or numerical tick labels are invented here.
+    function drawEmptyChart(reason) {
+      chartBox.replaceChildren();
+      var ns="http://www.w3.org/2000/svg";
+      var width=900, height=340, left=65, right=22, top=22, bottom=52;
+      var svg=document.createElementNS(ns,"svg");
+      svg.setAttribute("viewBox","0 0 "+width+" "+height);
+      svg.setAttribute("role","img");
+      svg.setAttribute("aria-label","MW over time chart, no verified measurements available");
+      svg.classList.add("ps-qs__mw-empty-svg");
+      function svgEl(tag, attrs, value) {
+        var element=document.createElementNS(ns,tag);
+        Object.keys(attrs||{}).forEach(function(key){element.setAttribute(key,String(attrs[key]));});
+        if(value!==undefined)element.textContent=value;
+        svg.appendChild(element);
+        return element;
+      }
+      for(var row=0;row<=4;row++){
+        var y=top+(height-top-bottom)*row/4;
+        svgEl("line",{x1:left,y1:y,x2:width-right,y2:y,stroke:"currentColor","stroke-opacity":".14"});
+      }
+      svgEl("line",{x1:left,y1:top,x2:left,y2:height-bottom,stroke:"currentColor","stroke-opacity":".5"});
+      svgEl("line",{x1:left,y1:height-bottom,x2:width-right,y2:height-bottom,stroke:"currentColor","stroke-opacity":".5"});
+      svgEl("text",{x:left-30,y:top+7,"font-size":"15","font-weight":"600",fill:"currentColor"},"MW");
+      svgEl("text",{x:(left+width-right)/2,y:height-15,"text-anchor":"middle","font-size":"14",fill:"currentColor"},"Time (AEST)");
+      svgEl("text",{x:width/2,y:height/2-8,"text-anchor":"middle",
+        "font-size":"20","font-weight":"600",fill:"currentColor"},"No verified MW series available");
+      svgEl("text",{x:width/2,y:height/2+20,"text-anchor":"middle",
+        "font-size":"13",fill:"currentColor","fill-opacity":".75"},"Chart lines will appear only when linked to real measurements");
+      chartBox.appendChild(svg);
+      chartBox.setAttribute("data-series-state","unavailable");
+      if(reason) status.textContent=reason;
+    }
+
     function chartSvg(response) {
       chartBox.replaceChildren();
+      chartBox.setAttribute("data-series-state","available");
       var t = response.timestamps_aest || [];
       var lines = [
         {name:"Modelled injection ceiling", color:"#D63F47", v:response.modelled_ceiling_mw},
@@ -306,7 +346,7 @@
         line.v.forEach(function (x) { if (typeof x === "number" && Number.isFinite(x)) values.push(x); });
       });
       if (t.length < 2 || !values.length) {
-        status.textContent="No modelled network ceiling has been observed in this time window. That does not mean capacity is unlimited or zero.";
+        drawEmptyChart("No modelled network constraint was invoked in this time window; this is not evidence of zero or unlimited capacity.");
         return;
       }
       var width = 900, height = 342, left = 61, top = 19, right = 18, bottom = 49;
@@ -390,16 +430,15 @@
     }
     function load(){
       var revision=++busy;
-      status.textContent="Loading verified MW data…";
-      chartBox.replaceChildren();
+      drawEmptyChart("Checking the available substation MW records…");
       assets.replaceChildren();
       // Clear the previous asset labels when switching periods.
       while(legend.children.length>2) legend.lastChild.remove();
       requestChart(period.value,false).then(function(response) {
         if(revision!==busy || !panel.isConnected)return;
         if(response.status!=="available"){
-          status.textContent=response.reason||"No verified substation-to-AEMO connection-point mapping is available yet.";
-          assets.textContent="Individual connected-asset MW series will appear once the source mappings and DUID dispatch histories are verified.";
+          drawEmptyChart(response.reason||"No verified substation-to-AEMO connection-point mapping is available yet.");
+          assets.textContent="Asset contributions (blue, orange and other lines) are not yet available. Each asset needs verified electrical connection and historical DUID output.";
           return;
         }
         status.textContent="AEMO connection point: "+(response.connection_point_label||response.aemo_connection_point_ids[0])+
@@ -410,7 +449,7 @@
           : "Individual-asset MW traces are not available yet: the current history stores connection-point totals, not per-DUID output.";
       }).catch(function(err) {
         if(revision!==busy || !panel.isConnected)return;
-        status.textContent=err&&err.message?err.message:"MW series temporarily unavailable.";
+        drawEmptyChart(err&&err.message?err.message:"MW series temporarily unavailable.");
       });
     }
     period.addEventListener("change",load);
