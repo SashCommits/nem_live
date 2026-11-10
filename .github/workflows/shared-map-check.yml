@@ -1,0 +1,45 @@
+name: Shared Power Socket map integration checks
+
+on:
+  pull_request:
+    paths:
+      - 'powersocket-map-core.js'
+      - 'qld-substations-widget.js'
+      - 'docs/shared-map-standard.md'
+      - '.github/workflows/shared-map-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate JS syntax and keyless shared basemap
+        run: |
+          node --check powersocket-map-core.js
+          node --check qld-substations-widget.js
+          node - <<'JS'
+          const fs = require('node:fs');
+          const vm = require('node:vm');
+          const core = fs.readFileSync('powersocket-map-core.js', 'utf8');
+          const qld = fs.readFileSync('qld-substations-widget.js', 'utf8');
+          if (/basemaps.cartocdn.com|apikey|required.*key=/i.test(core + qld)) throw Error('Unexpected key-restricted basemap');
+          if (!qld.includes('PowerSocketMaps')) throw Error('QLD widget is not using the shared basemap');
+          if (qld.includes('L.tileLayer')) throw Error('Old Leaflet raster tile path remains');
+          const window = {matchMedia: () => ({matches:false})};
+          const html = {theme:'light', getAttribute(x) {return x==='data-theme' ? this.theme : null;}};
+          const document = {documentElement:html,body:{getAttribute(){return null;}}};
+          vm.runInNewContext(core, {window,document,Promise,console});
+          if (!window.PowerSocketMaps) throw Error('Shared map theme did not initialise');
+          if (window.PowerSocketMaps.provider !== 'OpenFreeMap') throw Error('Wrong map provider');
+          if (!window.PowerSocketMaps.styleUrl().includes('/positron')) throw Error('Wrong light style');
+          html.theme = 'dark';
+          if (!window.PowerSocketMaps.styleUrl().includes('/dark')) throw Error('Wrong dark style');
+          console.log('Site-wide OpenFreeMap styles and Queensland map checks passed');
+          JS
