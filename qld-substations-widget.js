@@ -337,7 +337,8 @@
       var t = response.timestamps_aest || [];
       var lines = [
         {name:"Modelled injection ceiling", color:"#D63F47", v:response.modelled_ceiling_mw},
-        {name:"Actual net injection", color:"#48AC57", v:response.observed_injection_mw}
+        {name:site.id === "qld-diamondy" ? "Sum of reporting Wambo DUID SCADA readings" : "Dispatch-target net injection",
+          color:"#48AC57", v:response.observed_injection_mw}
       ];
       (response.assets || []).forEach(function (a, idx) {
         if (Array.isArray(a.mw) && a.mw.length === t.length) {
@@ -369,7 +370,9 @@
         line.v.forEach(function (x) { if (typeof x === "number" && Number.isFinite(x)) values.push(x); });
       });
       if (t.length < 2 || !values.length) {
-        drawEmptyChart("No modelled network constraint was invoked in this time window; this is not evidence of zero or unlimited capacity.");
+        drawEmptyChart(site.id === "qld-diamondy"
+          ? "No Wambo SCADA observations are available in this time window."
+          : "No modelled network constraint was invoked in this time window; this is not evidence of zero or unlimited capacity.");
         return;
       }
       var width = 900, height = 342, left = 61, top = 19, right = 18, bottom = 49;
@@ -384,7 +387,9 @@
       var svg=document.createElementNS(ns,"svg");
       svg.setAttribute("viewBox","0 0 "+width+" "+height);
       svg.setAttribute("role","img");
-      svg.setAttribute("aria-label","MW over time: modelled injection ceiling, actual net injection, and verified individual assets");
+      svg.setAttribute("aria-label",site.id === "qld-diamondy"
+          ? "Wambo five-minute SCADA-observed MW, reported DUID total, and any separately modelled connection-point ceilings"
+          : "MW over time: modelled network injection ceiling and dispatch-target injection, not observed SCADA output");
       svg.style.cssText="width:100%;height:auto;display:block;min-height:235px";
       function sv(tag, attrs, textValue) {
         var e=document.createElementNS(ns,tag);
@@ -471,6 +476,14 @@
           : "AEMO connection point: " + (response.connection_point_label ||
               (response.aemo_connection_point_ids || [])[0] || "Unknown") +
             " · " + response.start + " to " + response.end + ".";
+        if (site.id === "qld-diamondy" &&
+            Array.isArray(response.complete_intervals_count) &&
+            Array.isArray(response.reporting_intervals_count)) {
+          var missing = response.complete_intervals_count.some(function (n, i) {
+            return n < response.reporting_intervals_count[i];
+          });
+          if (missing) status.textContent += " Some five-minute intervals lack one or more Wambo DUID readings; the green line sums only available readings.";
+        }
         chartSvg(response);
         assets.textContent=(response.assets||[]).length
           ? (site.id === "qld-diamondy"
