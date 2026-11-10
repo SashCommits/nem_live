@@ -254,8 +254,11 @@
     hdr.appendChild(el("h3", "", "Network capacity and generation over time"));
     var period = el("select", "ps-qs__mw-period");
     period.setAttribute("aria-label", "MW chart period");
-    [["5m","Latest day · 5-minute"], ["1h","Latest 31 days · hourly"],
-      ["1d","Latest year · daily"]].forEach(function (pair) {
+    (site.id === "qld-diamondy"
+      ? [["5m","Latest archive day · 5-minute"], ["1h","Archive month · hourly"],
+          ["1d","Archive month · daily"]]
+      : [["5m","Latest day · 5-minute"], ["1h","Latest 31 days · hourly"],
+          ["1d","Latest year · daily"]]).forEach(function (pair) {
       var opt = el("option", "", pair[1]);
       opt.value = pair[0];
       if (pair[0] === "1h") opt.selected = true;
@@ -264,9 +267,14 @@
     hdr.appendChild(period);
     panel.appendChild(hdr);
     panel.appendChild(el("p", "ps-qs__mw-description",
-      "Network injection ceiling (modelled), actual net injection and the contributions of individual connected assets — in MW over time."));
+      site.id === "qld-diamondy"
+      ? "Real five-minute AEMO SCADA observations for Wambo Stage 1 and Stage 2, their reported-unit sum, and any independently modelled connection-point constraint ceilings. No unverified substation-wide limit is shown."
+      : "Time-varying modelled network headroom and connection-point injection, where verified — MW over time."));
     var legend = el("div", "ps-qs__mw-legend");
-    [["#D63F47","Modelled network injection ceiling"], ["#48AC57","Actual net injection"]]
+    (site.id === "qld-diamondy"
+      ? [["#D63F47","Per-connection-point constraint ceiling (if available; not a station rating)"],
+         ["#48AC57","Sum of reporting Wambo DUID SCADA readings"]]
+      : [["#D63F47","Modelled network injection ceiling"], ["#48AC57","Dispatch-target net injection"]])
       .forEach(function (pair) {
         var item = el("span","ps-qs__mw-label");
         var swatch = el("i","ps-qs__mw-swatch");
@@ -281,8 +289,9 @@
     panel.appendChild(chartBox);
     var assets = el("div", "ps-qs__mw-assets");
     panel.appendChild(assets);
-    panel.appendChild(el("p", "ps-qs__mw-footnote",
-      "The red curve is a modelled, time-varying connection-point injection ceiling — not an approved export limit or permanent substation rating. Green is net injection (negative values mean withdrawal). Missing data where no network limit was invoked must not be interpreted as zero headroom. NEM time (AEST)."));
+    panel.appendChild(el("p", "ps-qs__mw-footnote", site.id === "qld-diamondy"
+      ? "Source: AEMO DISPATCH_UNIT_SCADA instantaneous MW readings (not MWh or revenue meter data) and DISPATCHLOAD dispatch targets. All times NEM AEST. The green sum includes only reporting Wambo units; a missing unit is not zero. Any dashed red network ceilings apply to separate AEMO connection points and cannot be combined into a Diamondy substation limit."
+      : "Red is a modelled single-connection-point ceiling, not an approved export limit or permanent substation rating. Net injection derived from DISPATCHLOAD is a dispatch target, not measured output. Missing modelled limits do not mean zero or unlimited capacity. NEM time (AEST)."));
     var colors = ["#235D97","#9160C1","#DC9828","#39867E","#A66B4C","#7D8D37"];
     var busy = 0;
 
@@ -340,6 +349,20 @@
           legend.appendChild(item);
         }
       });
+      // Network constraint ceilings are individual AEMO connection-point
+      // models, never a summed physical Diamondy substation limit.
+      (response.connection_point_models || []).forEach(function (cp, idx) {
+        if (!Array.isArray(cp.modelled_ceiling_mw) ||
+            cp.modelled_ceiling_mw.length !== t.length ||
+            !cp.modelled_ceiling_mw.some(function (v) { return typeof v === "number"; })) return;
+        var label = "CP " + cp.connection_point_id + " ceiling (modelled)";
+        var color = idx % 2 ? "#C46D77" : "#D63F47";
+        lines.push({name:label, color:color, v:cp.modelled_ceiling_mw, dashed:true});
+        var item = el("span", "ps-qs__mw-label");
+        var swatch = el("i", "ps-qs__mw-swatch"); swatch.style.background=color;
+        item.appendChild(swatch); item.appendChild(el("span", "", label));
+        legend.appendChild(item);
+      });
       var values = [];
       lines.forEach(function (line) {
         if (!Array.isArray(line.v) || line.v.length !== t.length) return;
@@ -392,7 +415,8 @@
         });
         if(path){ sv("path",{d:path,fill:"none",stroke:line.color,
           "stroke-width":line===lines[0]?2.9:2.25,
-          "stroke-linecap":"round","stroke-linejoin":"round"}); anyDrawn=true; }
+          "stroke-linecap":"round","stroke-linejoin":"round",
+          "stroke-dasharray":line.dashed?"7 5":""}); anyDrawn=true; }
       });
       if(!anyDrawn) return;
       var guide=sv("line",{x1:left,y1:top,x2:left,y2:height-bottom,stroke:"currentColor",
@@ -441,12 +465,18 @@
           assets.textContent="Asset contributions (blue, orange and other lines) are not yet available. Each asset needs verified electrical connection and historical DUID output.";
           return;
         }
-        status.textContent="AEMO connection point: "+(response.connection_point_label||response.aemo_connection_point_ids[0])+
-          " · "+response.start+" to "+response.end+".";
+        status.textContent = site.id === "qld-diamondy"
+          ? "Verified source: AEMO SCADA for Wambo units · " + response.start + " to " + response.end +
+            " (AEST). Reporting units vary by interval; no site-wide rated limit is inferred."
+          : "AEMO connection point: " + (response.connection_point_label ||
+              (response.aemo_connection_point_ids || [])[0] || "Unknown") +
+            " · " + response.start + " to " + response.end + ".";
         chartSvg(response);
         assets.textContent=(response.assets||[]).length
-          ? "Individual asset MW series shown where verified."
-          : "Individual-asset MW traces are not available yet: the current history stores connection-point totals, not per-DUID output.";
+          ? (site.id === "qld-diamondy"
+            ? "Blue/purple: actual SCADA-observed MW per Wambo DUID. Green: sum of whichever Wambo units reported, not all injection through Diamondy. The SCADA archive and dispatch targets are independently retained for QA."
+            : "Individual DUID series shown where verified.")
+          : "Individual-asset MW traces not available until historical unit readings and electrical relationships are verified.";
       }).catch(function(err) {
         if(revision!==busy || !panel.isConnected)return;
         drawEmptyChart(err&&err.message?err.message:"MW series temporarily unavailable.");
