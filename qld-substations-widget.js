@@ -93,6 +93,18 @@
     ".ps-qs__facts{display:grid;grid-template-columns:minmax(160px,230px) 1fr;gap:.55rem 1rem;border-top:1px solid var(--qs-rule);padding-top:1rem;font-size:.89rem;overflow-wrap:anywhere}",
     ".ps-qs__facts dt{opacity:.7}.ps-qs__facts dd{margin:0}",
     ".ps-qs__note{border-left:2px solid var(--qs-rule);padding:.8rem 1rem;margin:1.2rem 0;font-size:.86rem}",
+
+    ".ps-qs__mw{margin:1.2rem 0 1.55rem;border:1px solid var(--qs-rule);padding:1rem;border-radius:5px}",
+    ".ps-qs__mw-head{display:flex;align-items:center;justify-content:space-between;gap:.7rem;flex-wrap:wrap}",
+    ".ps-qs__mw-head h3{font-size:1.12rem;font-weight:650}",
+    ".ps-qs__mw-period{color:inherit;background:transparent;border:1px solid var(--qs-rule);font:inherit;font-size:.82rem;padding:.45rem;border-radius:4px}",
+    ".ps-qs__mw-description,.ps-qs__mw-footnote{font-size:.82rem;opacity:.77;margin:.65rem 0}",
+    ".ps-qs__mw-legend{display:flex;flex-wrap:wrap;gap:.6rem 1.2rem;margin:.8rem 0;font-size:.8rem}",
+    ".ps-qs__mw-label{display:inline-flex;align-items:center;gap:.35rem}",
+    ".ps-qs__mw-swatch{width:1.25rem;height:3px;display:inline-block;border-radius:2px}",
+    ".ps-qs__mw-message,.ps-qs__mw-assets{font-size:.86rem;margin:.7rem 0}",
+    ".ps-qs__mw-chart{overflow:hidden;position:relative}",
+    ".ps-qs__mw-hover{font-size:.75rem;opacity:.8;min-height:1rem;padding:.3rem 0}",
     ".ps-qs__error{padding:1rem;border:1px solid var(--qs-rule)}",
     "@media(max-width:620px){.ps-qs__map{height:470px;min-height:300px}.ps-qs__facts{grid-template-columns:1fr}.ps-qs__facts dt{margin-top:.35rem}}"
   ].join("\n");
@@ -179,6 +191,183 @@
     container.appendChild(el("dd", "", value));
   }
 
+
+  // Physical GA sites and AEMO dispatch connection points are not 1:1.
+  // This chart intentionally refuses to attribute time series until the
+  // backend has an independently evidence-verified physical site mapping.
+  function renderMWChart(container, site) {
+    var panel = el("section", "ps-qs__mw");
+    panel.setAttribute("aria-label", "Substation network capacity and generation over time");
+    container.appendChild(panel);
+    var hdr = el("div", "ps-qs__mw-head");
+    hdr.appendChild(el("h3", "", "Network capacity and generation over time"));
+    var period = el("select", "ps-qs__mw-period");
+    period.setAttribute("aria-label", "MW chart period");
+    [["5m","Latest day · 5-minute"], ["1h","Latest 31 days · hourly"],
+      ["1d","Latest year · daily"]].forEach(function (pair) {
+      var opt = el("option", "", pair[1]);
+      opt.value = pair[0];
+      if (pair[0] === "1h") opt.selected = true;
+      period.appendChild(opt);
+    });
+    hdr.appendChild(period);
+    panel.appendChild(hdr);
+    panel.appendChild(el("p", "ps-qs__mw-description",
+      "Network injection ceiling (modelled), actual net injection and the contributions of individual connected assets — in MW over time."));
+    var legend = el("div", "ps-qs__mw-legend");
+    [["#D63F47","Modelled network injection ceiling"], ["#48AC57","Actual net injection"]]
+      .forEach(function (pair) {
+        var item = el("span","ps-qs__mw-label");
+        var swatch = el("i","ps-qs__mw-swatch");
+        swatch.style.background = pair[0]; item.appendChild(swatch);
+        item.appendChild(el("span","",pair[1])); legend.appendChild(item);
+      });
+    panel.appendChild(legend);
+    var status = el("p", "ps-qs__mw-message");
+    status.setAttribute("role","status");
+    panel.appendChild(status);
+    var chartBox = el("div", "ps-qs__mw-chart");
+    panel.appendChild(chartBox);
+    var assets = el("div", "ps-qs__mw-assets");
+    panel.appendChild(assets);
+    panel.appendChild(el("p", "ps-qs__mw-footnote",
+      "The red curve is a modelled, time-varying connection-point injection ceiling — not an approved export limit or permanent substation rating. Green is net injection (negative values mean withdrawal). Missing data where no network limit was invoked must not be interpreted as zero headroom. NEM time (AEST)."));
+    var colors = ["#235D97","#9160C1","#DC9828","#39867E","#A66B4C","#7D8D37"];
+    var busy = 0;
+    function chartSvg(response) {
+      chartBox.replaceChildren();
+      var t = response.timestamps_aest || [];
+      var lines = [
+        {name:"Modelled injection ceiling", color:"#D63F47", v:response.modelled_ceiling_mw},
+        {name:"Actual net injection", color:"#48AC57", v:response.observed_injection_mw}
+      ];
+      (response.assets || []).forEach(function (a, idx) {
+        if (Array.isArray(a.mw) && a.mw.length === t.length) {
+          lines.push({name:a.name || a.duid || ("Asset " + (idx+1)),
+            color:colors[idx % colors.length], v:a.mw});
+          var item=el("span","ps-qs__mw-label");
+          var sw=el("i","ps-qs__mw-swatch"); sw.style.background=colors[idx % colors.length];
+          item.appendChild(sw); item.appendChild(el("span","",lines[lines.length-1].name));
+          legend.appendChild(item);
+        }
+      });
+      var values = [];
+      lines.forEach(function (line) {
+        if (!Array.isArray(line.v) || line.v.length !== t.length) return;
+        line.v.forEach(function (x) { if (typeof x === "number" && Number.isFinite(x)) values.push(x); });
+      });
+      if (t.length < 2 || !values.length) {
+        status.textContent="No modelled network ceiling has been observed in this time window. That does not mean capacity is unlimited or zero.";
+        return;
+      }
+      var width = 900, height = 342, left = 61, top = 19, right = 18, bottom = 49;
+      var innerW = width-left-right, innerH = height-top-bottom;
+      var low = Math.min(0,...values), high = Math.max(0,...values);
+      if (high === low) high = low + 1;
+      var pad = (high-low)*.08;
+      low -= pad; high += pad;
+      var x = function(i){return left+(t.length===1?innerW/2:(i/(t.length-1))*innerW);};
+      var y = function(v){return top+(high-v)/(high-low)*innerH;};
+      var ns="http://www.w3.org/2000/svg";
+      var svg=document.createElementNS(ns,"svg");
+      svg.setAttribute("viewBox","0 0 "+width+" "+height);
+      svg.setAttribute("role","img");
+      svg.setAttribute("aria-label","MW over time: modelled injection ceiling, actual net injection, and verified individual assets");
+      svg.style.cssText="width:100%;height:auto;display:block;min-height:235px";
+      function sv(tag, attrs, textValue) {
+        var e=document.createElementNS(ns,tag);
+        Object.keys(attrs||{}).forEach(function(k){e.setAttribute(k,String(attrs[k]));});
+        if(textValue!==undefined)e.textContent=textValue;
+        svg.appendChild(e); return e;
+      }
+      for(var k=0;k<=4;k++){
+        var v=low+(high-low)*k/4, gy=y(v);
+        sv("line",{x1:left,y1:gy,x2:width-right,y2:gy,stroke:"currentColor","stroke-opacity":".13"});
+        sv("text",{x:left-9,y:gy+4,"text-anchor":"end",fill:"currentColor","font-size":"12"},Math.round(v).toLocaleString());
+      }
+      sv("text",{x:14,y:16,fill:"currentColor","font-size":"13","font-weight":"600"},"MW");
+      sv("line",{x1:left,y1:height-bottom,x2:width-right,y2:height-bottom,stroke:"currentColor","stroke-opacity":".5"});
+      for(var tick=0;tick<=4;tick++){
+        var ix=Math.min(t.length-1,Math.round((t.length-1)*tick/4));
+        sv("text",{x:x(ix),y:height-bottom+23,"text-anchor":"middle",fill:"currentColor","font-size":"12"},
+          String(t[ix]).replace("T"," ").slice(5,16));
+      }
+      var anyDrawn=false;
+      lines.forEach(function(line) {
+        if(!Array.isArray(line.v)||line.v.length!==t.length)return;
+        var path="",active=false;
+        line.v.forEach(function(val,i) {
+          if(typeof val !== "number" || !Number.isFinite(val)){active=false;return;}
+          path += (active?"L":"M")+x(i).toFixed(2)+","+y(val).toFixed(2);
+          active=true;
+        });
+        if(path){ sv("path",{d:path,fill:"none",stroke:line.color,
+          "stroke-width":line===lines[0]?2.9:2.25,
+          "stroke-linecap":"round","stroke-linejoin":"round"}); anyDrawn=true; }
+      });
+      if(!anyDrawn) return;
+      var guide=sv("line",{x1:left,y1:top,x2:left,y2:height-bottom,stroke:"currentColor",
+        "stroke-opacity":".3","stroke-dasharray":"4 4",visibility:"hidden"});
+      var label=el("div","ps-qs__mw-hover");
+      label.setAttribute("aria-live","off");
+      chartBox.appendChild(svg); chartBox.appendChild(label);
+      svg.addEventListener("pointermove",function(ev){
+        var b=svg.getBoundingClientRect();
+        var frac=(ev.clientX-b.left)/Math.max(1,b.width);
+        var i=Math.min(t.length-1,Math.max(0,Math.round((frac*width-left)/innerW*(t.length-1))));
+        guide.setAttribute("x1",x(i));guide.setAttribute("x2",x(i));guide.setAttribute("visibility","visible");
+        var pieces=[String(t[i]).replace("T"," ")+" AEST"];
+        lines.forEach(function(line) {
+          var n=line.v && line.v[i];
+          pieces.push(line.name+": "+(typeof n==="number"?n.toLocaleString()+" MW":"Not recorded"));
+        });
+        label.textContent=pieces.join("  ·  ");
+      });
+      svg.addEventListener("pointerleave",function(){guide.setAttribute("visibility","hidden");label.textContent="";});
+    }
+    function requestChart(step, retried) {
+      return fetch(window.location.origin+"/members/api/session", {credentials:"same-origin"})
+        .then(function(r){return r.ok?r.text():"";}).then(function(token){
+          if(!token.trim()) throw {status:401,message:"Sign in to view member-only headroom and dispatch data."};
+          var url=apiBase+"/api/headroom?view=substation_chart&site_id="+
+            encodeURIComponent(site.id)+"&step="+encodeURIComponent(step);
+          return fetch(url,{headers:{Authorization:"Bearer "+token.trim()},cache:"no-store"})
+            .then(function(response){return response.json().then(function(payload){
+              if(response.status===401 && !retried) return requestChart(step,true);
+              if(!response.ok) throw {status:response.status,message:payload.message||"Series temporarily unavailable."};
+              return payload;
+            });});
+        });
+    }
+    function load(){
+      var revision=++busy;
+      status.textContent="Loading verified MW data…";
+      chartBox.replaceChildren();
+      assets.replaceChildren();
+      // Clear the previous asset labels when switching periods.
+      while(legend.children.length>2) legend.lastChild.remove();
+      requestChart(period.value,false).then(function(response) {
+        if(revision!==busy || !panel.isConnected)return;
+        if(response.status!=="available"){
+          status.textContent=response.reason||"No verified substation-to-AEMO connection-point mapping is available yet.";
+          assets.textContent="Individual connected-asset MW series will appear once the source mappings and DUID dispatch histories are verified.";
+          return;
+        }
+        status.textContent="AEMO connection point: "+(response.connection_point_label||response.aemo_connection_point_ids[0])+
+          " · "+response.start+" to "+response.end+".";
+        chartSvg(response);
+        assets.textContent=(response.assets||[]).length
+          ? "Individual asset MW series shown where verified."
+          : "Individual-asset MW traces are not available yet: the current history stores connection-point totals, not per-DUID output.";
+      }).catch(function(err) {
+        if(revision!==busy || !panel.isConnected)return;
+        status.textContent=err&&err.message?err.message:"MW series temporarily unavailable.";
+      });
+    }
+    period.addEventListener("change",load);
+    load();
+  }
+
   function showDetail(site, meta) {
     source.hidden = true;
     wrap.replaceChildren();
@@ -208,6 +397,8 @@
       stats.appendChild(cell);
     });
     block.appendChild(stats);
+
+    renderMWChart(block, site);
 
     var smallMap = el("div", "ps-qs__detailmap");
     smallMap.setAttribute("aria-label", "Substation geographic location");
