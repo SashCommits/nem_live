@@ -1,0 +1,25 @@
+name: Queensland substation MW chart UI checks
+
+on:
+  pull_request:
+    paths:
+      - 'qld-substations-widget.js'
+      - 'tests/qld-substation-mw-chart.test.js'
+      - '.github/workflows/qld-substation-mw-chart-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check chart widget syntax
+        run: node --check qld-substations-widget.js
+      - name: Verify chart canvas for missing or verified source data
+        run: node tests/qld-substation-mw-chart.test.js
