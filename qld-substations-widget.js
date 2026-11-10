@@ -196,7 +196,7 @@
     showCurrentRoute();
     wrap.scrollIntoView({ block: "start" });
   }
-  function createMarker(site, map, lib, size, navigate) {
+  function createMarker(site, map, lib, size, allowNavigation) {
     var point = maps.marker(lib, site.latitude, site.longitude,
       COLORS[lifecycle(site.status)], size);
     point.marker.addTo(map);
@@ -222,10 +222,10 @@
     element.addEventListener("focus", showPopup);
     element.addEventListener("blur", hidePopup);
     element.addEventListener("click", function () {
-      if (navigate) navigate(site.id);
+      if (allowNavigation) navigate(site.id);
     });
     element.addEventListener("keydown", function (event) {
-      if ((event.key === "Enter" || event.key === " ") && navigate) {
+      if ((event.key === "Enter" || event.key === " ") && allowNavigation) {
         event.preventDefault();
         navigate(site.id);
       }

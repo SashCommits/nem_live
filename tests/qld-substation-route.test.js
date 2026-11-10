@@ -59,4 +59,59 @@ assert.ok(js.includes('window.addEventListener("popstate", showCurrentRoute)'), 
 assert.ok(js.includes('window.addEventListener("hashchange", showCurrentRoute)'), "Manual fragment changes must restore the view");
 assert.ok(js.includes("teardownMaps();"), "Abandoned map canvases must be cleaned up");
 assert.ok(js.includes("back.onclick = function () { navigate(null); }"), "Back should switch views without reloading");
-console.log("Substation refresh-safe URLs and in-page navigation passed");
+// Regression for PR #30: marker's Boolean "navigate" argument shadowed the
+// actual navigate() function. Clicking a map dot tried to call `true(...)`.
+const markerFrom = js.indexOf("  function createMarker(");
+const markerTo = js.indexOf("\n  function fact(", markerFrom);
+assert.ok(markerFrom > 0 && markerTo > markerFrom, "createMarker implementation not found");
+const markerListeners = [];
+const fakeMarker = { addTo(){return this;}, remove(){} };
+const fakeMap = {};
+const fakeLib = {};
+ctx.maps = {
+  marker() {
+    const listeners = {};
+    markerListeners.push(listeners);
+    return {
+      element: {
+        setAttribute(){},
+        addEventListener(name, handler){ listeners[name] = handler; }
+      },
+      marker: fakeMarker
+    };
+  }
+};
+ctx.COLORS = {operational: "#dc4046"};
+ctx.lifecycle = () => "operational";
+ctx.toText = (value) => String(value);
+ctx.siteForTest = {
+  id: "ga:940", name: "Test Queensland Substation", latitude:-25,
+  longitude:148, voltage_kv:275, status:"Operational", ga_objectid:940
+};
+ctx.fakeMap = fakeMap;
+ctx.fakeLib = fakeLib;
+vm.runInContext(js.slice(markerFrom, markerTo), ctx);
+const nBefore = window.history.pushes.length;
+vm.runInContext("createMarker(siteForTest, fakeMap, fakeLib, 12, true)", ctx);
+assert.equal(typeof markerListeners[0].click, "function");
+assert.doesNotThrow(() => markerListeners[0].click(), "Map dot click must call the real navigation function");
+assert.equal(window.history.pushes.length, nBefore+1, "Marker click must change route");
+assert.equal(read("routeSubstation()"), "ga:940");
+
+window.location = new URL("https://news.example/headroom-explorer/");
+let keyboardPrevented = false;
+markerListeners[0].keydown({
+  key:"Enter", preventDefault(){keyboardPrevented=true;}
+});
+assert.ok(keyboardPrevented, "Keyboard activating a marker should prevent default");
+assert.equal(read("routeSubstation()"), "ga:940");
+assert.equal(window.history.pushes.length, nBefore+2, "Keyboard activation must change route");
+
+const noNavBefore = window.history.pushes.length;
+vm.runInContext("createMarker(siteForTest, fakeMap, fakeLib, 18, false)", ctx);
+assert.doesNotThrow(() => markerListeners[1].click(), "Non-navigating detail map marker should not error");
+assert.equal(window.history.pushes.length, noNavBefore, "Detail view marker must not navigate");
+assert.ok(js.includes("function createMarker(site, map, lib, size, allowNavigation)"),
+  "Never shadow the navigate() function with a Boolean parameter");
+
+console.log("Substation marker clicks, keyboard activation and refresh-safe navigation passed");
