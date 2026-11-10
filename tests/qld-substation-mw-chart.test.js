@@ -37,7 +37,7 @@ assert(start>=0 && end>start, "Render function not found");
 assert(source.includes("renderMWChart(block, site)"),"Detail page must include the MW chart");
 assert(source.includes("No verified MW series available"),"Visible missing-data chart required");
 
-async function exercise(backend) {
+async function exercise(backend, siteID='ga:82') {
   const requests=[];
   const ctx={
     document:{createElementNS: (_ns,tag) => svgEl(tag)},
@@ -52,7 +52,7 @@ async function exercise(backend) {
   };
   vm.runInNewContext(source.slice(start,end),ctx);
   const container = new Element("div");
-  const site={id:"ga:82",name:"Example station"};
+  const site={id:siteID,name:siteID==="qld-diamondy"?"Diamondy":"Example station"};
   vm.runInNewContext("renderMWChart(container, site)",Object.assign(ctx,{container,site}));
   const panel=container.children[0];
   assert(panel && panel.className==="ps-qs__mw","MW chart section must exist");
@@ -86,5 +86,29 @@ async function exercise(backend) {
   assert.equal(available.chart.attributes["data-series-state"],"available");
   const svg=available.chart.children.find(c=>c.tagName==="svg");
   assert(svg && svg.children.some(c=>c.tagName==="path"),"Verified data must draw real MW lines");
-  console.log("MW chart visibility and verified-data drawing passed");
+  // The Diamondy pilot plots two separately sourced Wambo unit traces.
+  const diamondy=await exercise({
+    site_id:"qld-diamondy",status:"available",
+    start:"2026-10-01",end:"2026-10-31",
+    timestamps_aest:["2026-10-01T10:00","2026-10-01T11:00","2026-10-01T12:00"],
+    modelled_ceiling_mw:[null,null,null],
+    observed_injection_mw:[180,190,200],
+    assets:[
+      {name:"Wambo Stage 1",duid:"WAMBOWF1",mw:[100,110,120],dispatch_target_mw:[98,108,117]},
+      {name:"Wambo Stage 2",duid:"WAMBOWF2",mw:[80,80,80],dispatch_target_mw:[79,82,78]}
+    ],
+    connection_point_models:[
+      {connection_point_id:"QDMW1W",status:"available",modelled_ceiling_mw:[200,210,220]},
+      {connection_point_id:"QDMR1W",status:"not_invoked",modelled_ceiling_mw:[null,null,null]}
+    ]
+  },"qld-diamondy");
+  assert(diamondy.requests.some(url=>url.includes("site_id=qld-diamondy")));
+  assert.equal(diamondy.chart.attributes["data-series-state"],"available");
+  const diamondySvg=diamondy.chart.children.find(c=>c.tagName==="svg");
+  const paths=diamondySvg.children.filter(c=>c.tagName==="path");
+  assert.equal(paths.length,4,"Reported total, two Wambo DUIDs and a separate modelled CP curve expected");
+  assert(paths.some(p=>p.attributes["stroke-dasharray"]==="7 5"),
+    "AEMO connection-point ceiling must be dashed and distinct");
+  assert(diamondy.state.textContent.includes("Wambo units"));
+  console.log("MW chart visibility, Wambo per-unit SCADA and scoped headroom drawing passed");
 })().catch(error=>{console.error(error);process.exitCode=1});
