@@ -72,3 +72,46 @@ jobs:
               raise RuntimeError("Pinned MapLibre JS UMD runtime missing")
           print("Pinned MapLibre GL JS v5.8.0 available")
           PY
+
+      - name: Regression test cached widget recovering missing shared map core
+        run: |
+          node - <<'JS'
+          const vm = require('node:vm');
+          const fs = require('node:fs');
+          const source = fs.readFileSync('qld-substations-widget.js','utf8');
+          const begin = source.indexOf('  var MAP_CORE_FALLBACK');
+          const end = source.indexOf('  function startQueenslandMap(maps)', begin);
+          if (begin < 0 || end < 0) throw Error('Cannot find recovery loader');
+          const scripts = [];
+          const window = {};
+          const context = vm.createContext({
+            window, Promise, Error,
+            el: () => ({}),
+            document: {head:{appendChild(node){scripts.push(node)}}}
+          });
+          vm.runInContext(source.slice(begin,end),context);
+          const promise = vm.runInContext('ensureMapCore()',context);
+          if (scripts.length !== 1) throw Error('Missing core did not trigger a script request');
+          if (!scripts[0].src.includes('@a3fef15e5b96d77f24c2cfa598fa5f8d2ad5080c/')) {
+            throw Error('Fallback is not pinned to the actual map-core merge commit');
+          }
+          window.PowerSocketMaps = {provider:'OpenFreeMap'};
+          scripts[0].onload();
+          promise.then(value=>{
+            if (value !== window.PowerSocketMaps) throw Error('Recovered wrong map module');
+            return vm.runInContext('ensureMapCore()',context);
+          }).then(value=>{
+            if (scripts.length !== 1 || value.provider !== 'OpenFreeMap') throw Error('Recovered core not reused');
+            console.log('Cached-widget map core recovery works');
+          }).catch(error => {console.error(error);process.exitCode=1});
+          JS
+      - name: Verify version-pinned recovery module actually exists on CDN
+        run: |
+          python - <<'PY'
+          import urllib.request
+          url = 'https://cdn.jsdelivr.net/gh/SashCommits/nem_live@a3fef15e5b96d77f24c2cfa598fa5f8d2ad5080c/powersocket-map-core.js'
+          with urllib.request.urlopen(urllib.request.Request(url,headers={'User-Agent':'ThePowerSocket-MapQA/1.0'}),timeout=25) as r:
+              content=r.read()
+          assert b'PowerSocketMaps' in content and b'tiles.openfreemap.org' in content
+          print('Pinned map recovery module publicly available:',len(content),'bytes')
+          PY
