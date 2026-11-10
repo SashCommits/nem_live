@@ -1,0 +1,32 @@
+name: Queensland GA substation map widget checks
+
+on:
+  pull_request:
+    paths:
+      - "qld-substations-widget.js"
+      - ".github/workflows/qld-substations-widget-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: JavaScript syntax and basic source safety checks
+        run: |
+          node --check qld-substations-widget.js
+          node - <<'JS'
+          const fs = require('node:fs');
+          const text = fs.readFileSync('qld-substations-widget.js', 'utf8');
+          for (const required of ['data-qld-substations', '/api/substations', 'substation', 'site.voltage_kv', 'site.status', 'feature_subtype', 'window.location.assign']) {
+            if (!text.includes(required)) throw Error('Missing expected map feature: ' + required);
+          }
+          if (/\.innerHTML\s*=\s*[^;]+site\./.test(text)) throw Error('Potential unsafe GA HTML insertion');
+          console.log('Queensland map widget source checks passed.');
+          JS
