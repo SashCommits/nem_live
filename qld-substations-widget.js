@@ -109,13 +109,31 @@
   source.parentNode.insertBefore(wrap, source);
 
   // Shared site basemap. Any map added elsewhere should use the same module.
-  var maps = window.PowerSocketMaps;
-  if (!maps) {
-    wrap.replaceChildren();
-    wrap.appendChild(el("p", "ps-qs__error",
-      "Queensland map module is unavailable; the existing Headroom Explorer remains accessible below."));
-    return;
+  // The page and its /api/widget response are cached independently.
+  // During a deploy, an older widget bundle can contain this Queensland
+  // component without the newly introduced shared map core. Self-load the
+  // version-pinned module instead of permanently showing an error.
+  var MAP_CORE_FALLBACK = "https://cdn.jsdelivr.net/gh/SashCommits/nem_live@0dd7301916707728f29a41885baf751b93488454/powersocket-map-core.js";
+  function ensureMapCore() {
+    if (window.PowerSocketMaps) return Promise.resolve(window.PowerSocketMaps);
+    if (window.__psSharedMapCorePromise) return window.__psSharedMapCorePromise;
+    window.__psSharedMapCorePromise = new Promise(function (resolve, reject) {
+      var script = el("script");
+      script.src = MAP_CORE_FALLBACK;
+      script.async = true;
+      script.onload = function () {
+        if (window.PowerSocketMaps) resolve(window.PowerSocketMaps);
+        else reject(new Error("Shared map module did not initialise"));
+      };
+      script.onerror = function () { reject(new Error("Shared map module could not be loaded")); };
+      document.head.appendChild(script);
+    }).catch(function (error) {
+      window.__psSharedMapCorePromise = null;
+      throw error;
+    });
+    return window.__psSharedMapCorePromise;
   }
+  function startQueenslandMap(maps) {
   var state = { records: [], map: null, lib: null, markers: [], mapPending: false };
   function createMarker(site, map, lib, size, navigate) {
     var point = maps.marker(lib, site.latitude, site.longitude,
@@ -376,4 +394,11 @@
       wrap.appendChild(failed);
       source.hidden = false;
     });
+  }
+  ensureMapCore().then(startQueenslandMap).catch(function () {
+    wrap.replaceChildren();
+    wrap.appendChild(el("p", "ps-qs__error",
+      "Queensland map could not load. The existing Headroom Explorer remains accessible below."));
+    source.hidden = false;
+  });
 })();
