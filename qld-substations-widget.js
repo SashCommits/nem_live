@@ -113,7 +113,7 @@
   // During a deploy, an older widget bundle can contain this Queensland
   // component without the newly introduced shared map core. Self-load the
   // version-pinned module instead of permanently showing an error.
-  var MAP_CORE_FALLBACK = "https://cdn.jsdelivr.net/gh/SashCommits/nem_live@0dd7301916707728f29a41885baf751b93488454/powersocket-map-core.js";
+  var MAP_CORE_FALLBACK = "https://cdn.jsdelivr.net/gh/SashCommits/nem_live@a3fef15e5b96d77f24c2cfa598fa5f8d2ad5080c/powersocket-map-core.js";
   function ensureMapCore() {
     if (window.PowerSocketMaps) return Promise.resolve(window.PowerSocketMaps);
     if (window.__psSharedMapCorePromise) return window.__psSharedMapCorePromise;
