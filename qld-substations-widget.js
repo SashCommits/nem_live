@@ -560,14 +560,17 @@
     titlebox.appendChild(el("h2", "", site.name));
     titlebox.appendChild(el("p", "ps-qs__intro", site.source_kind === "powerlink_supplemental"
       ? "Powerlink-documented connection site · approximate location · AEMO unit MW history"
-      : "Queensland substation · Geoscience Australia infrastructure record"));
+      : site.source_kind === "powerlink_unlocated"
+        ? "Powerlink-documented site · location not yet linked to GA record"
+        : "Queensland substation · Geoscience Australia infrastructure record"));
     head.appendChild(titlebox);
     block.appendChild(head);
 
     var stats = el("div", "ps-qs__stats");
     [
-      ["Status (GA)", toText(site.status)],
-      ["Voltage (GA)", site.voltage_kv == null ? "Not recorded" : site.voltage_kv + " kV"],
+      [site.ga_objectid == null ? "Status (source)" : "Status (GA)", toText(site.status)],
+      [site.ga_objectid == null ? "Voltage (source)" : "Voltage (GA)",
+       site.voltage_kv == null ? "Not recorded" : site.voltage_kv + " kV"],
       ["Type", toText(site.feature_subtype, toText(site.feature_type))],
       ["Locality", toText(site.locality)]
     ].forEach(function (pair) {
@@ -581,14 +584,20 @@
     if (!site.no_map_marker) renderMWChart(block, site);
     renderDocumentedConnections(block, site);
 
-    var smallMap = el("div", "ps-qs__detailmap");
-    smallMap.setAttribute("aria-label", "Substation geographic location");
-    block.appendChild(smallMap);
+    var smallMap = null;
+    if (site.latitude != null && site.longitude != null && !site.no_map_marker) {
+      smallMap = el("div", "ps-qs__detailmap");
+      smallMap.setAttribute("aria-label", "Substation geographic location");
+      block.appendChild(smallMap);
+    } else {
+      block.appendChild(el("p", "ps-qs__note",
+        "This physical connection site's name and project link have official source evidence, but the corresponding GA record/coordinates are not yet confirmed. No map pin or site-level MW is inferred."));
+    }
     var facts = el("dl", "ps-qs__facts");
     if (site.ga_objectid != null) fact("GA record ID", String(site.ga_objectid), facts);
     else fact("Site record", toText(site.id) + " · Powerlink supplemental (not in GA)", facts);
-    fact("Latitude", site.latitude.toFixed(6), facts);
-    fact("Longitude", site.longitude.toFixed(6), facts);
+    fact("Latitude", site.latitude == null ? "Unverified" : site.latitude.toFixed(6), facts);
+    fact("Longitude", site.longitude == null ? "Unverified" : site.longitude.toFixed(6), facts);
     fact("Feature category", toText(site.feature_type), facts);
     fact("Feature subtype", toText(site.feature_subtype), facts);
     fact("Description", toText(site.description), facts);
@@ -610,14 +619,16 @@
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
     block.appendChild(sourceP);
-    maps.create(smallMap, { center: [site.longitude, site.latitude], zoom: 12 }).then(function (result) {
-      if (!smallMap.isConnected) { result.map.remove(); return; }
-      state.detailMap = result.map;
-      createMarker(site, result.map, result.lib, 18, false);
-      result.map.resize();
-    }).catch(function () {
-      if (smallMap.isConnected) smallMap.textContent = "Map could not be loaded. Coordinates are listed below.";
-    });
+    if (smallMap) {
+      maps.create(smallMap, { center: [site.longitude, site.latitude], zoom: 12 }).then(function (result) {
+        if (!smallMap.isConnected) { result.map.remove(); return; }
+        state.detailMap = result.map;
+        createMarker(site, result.map, result.lib, 18, false);
+        result.map.resize();
+      }).catch(function () {
+        if (smallMap.isConnected) smallMap.textContent = "Map could not be loaded. Coordinates are listed below.";
+      });
+    }
   }
 
   function showMap(meta) {
