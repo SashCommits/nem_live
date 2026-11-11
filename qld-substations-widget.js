@@ -114,6 +114,14 @@
     ".ps-qs__mw-label{display:inline-flex;align-items:center;gap:.35rem}",
     ".ps-qs__mw-swatch{width:1.25rem;height:3px;display:inline-block;border-radius:2px}",
     ".ps-qs__mw-message,.ps-qs__mw-assets{font-size:.86rem;margin:.7rem 0}",
+    ".ps-qs__connections{border:1px solid var(--qs-rule);border-radius:5px;padding:1rem;margin:1.2rem 0 1.5rem}",
+    ".ps-qs__connections h3{font-size:1.12rem;font-weight:650;margin-bottom:.5rem}",
+    ".ps-qs__connections-note{font-size:.84rem;opacity:.8;margin:.5rem 0 1rem}",
+    ".ps-qs__connection-item{border-top:1px solid var(--qs-rule);padding:.75rem 0;font-size:.87rem}",
+    ".ps-qs__connection-item h4{font:inherit;font-weight:650;margin:0 0 .3rem}",
+    ".ps-qs__connection-meta{font-size:.79rem;opacity:.78;margin:.25rem 0}",
+    ".ps-qs__connection-source{font-size:.8rem;margin:.35rem 0}",
+    ".ps-qs__connection-source a{color:inherit;text-decoration:underline;text-underline-offset:3px}",
     ".ps-qs__mw-chart{overflow:hidden;position:relative;min-height:235px}",
     ".ps-qs__mw-empty-svg{width:100%;height:auto;display:block;min-height:235px;border:1px solid var(--qs-rule);border-radius:3px}",
 
@@ -499,6 +507,45 @@
     load();
   }
 
+
+  // Documented project/network route, NOT the precise physical AEMO CP terminal.
+  // A generator on an upstream route must never be summed as node injection.
+  function renderDocumentedConnections(block, site) {
+    var panel = el("section", "ps-qs__connections");
+    panel.appendChild(el("h3", "", "Documented connecting assets"));
+    var assets = Array.isArray(site.connected_assets) ? site.connected_assets : [];
+    panel.appendChild(el("p", "ps-qs__connections-note", assets.length
+      ? (site.asset_association_note ||
+         "Documented project route; not proof of the AEMO CP's exact electrical position.")
+      : "No independently sourced project-to-substation relationship recorded here yet. This does not mean no assets connect."));
+    assets.forEach(function (a) {
+      var item = el("article", "ps-qs__connection-item");
+      item.appendChild(el("h4", "", toText(a.name, toText(a.duid))));
+      var type = ({
+        project_site_connection: "Documented project-site connection",
+        upstream_transmission_route: "Upstream transmission route — not measured MW at this yard",
+        documented_dedicated_feeder: "Documented dedicated feeder / bay"
+      })[a.relationship_type] || "Sourced network relationship";
+      item.appendChild(el("p", "ps-qs__connection-meta",
+        type + " · DUID " + toText(a.duid) +
+        " · AEMO CP " + toText(a.aemo_connection_point_id)));
+      item.appendChild(el("p", "", toText(a.relationship_summary)));
+      item.appendChild(el("p", "ps-qs__connection-meta",
+        "The AEMO CP's precise electrical boundary remains unverified; this is not measured substation injection."));
+      if (a.evidence_source_url) {
+        var paragraph = el("p", "ps-qs__connection-source");
+        var link = el("a", "", "Powerlink source");
+        link.href = a.evidence_source_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        paragraph.appendChild(link);
+        item.appendChild(paragraph);
+      }
+      panel.appendChild(item);
+    });
+    block.appendChild(panel);
+  }
+
   function showDetail(site, meta) {
     source.hidden = true;
     wrap.replaceChildren();
@@ -531,7 +578,8 @@
     });
     block.appendChild(stats);
 
-    renderMWChart(block, site);
+    if (!site.no_map_marker) renderMWChart(block, site);
+    renderDocumentedConnections(block, site);
 
     var smallMap = el("div", "ps-qs__detailmap");
     smallMap.setAttribute("aria-label", "Substation geographic location");
@@ -717,7 +765,7 @@
     .then(function (meta) {
       if (!meta || !Array.isArray(meta.sites)) throw Error("Invalid substation response");
       // GA remains intact; Diamondy is explicitly a Powerlink-sourced pilot.
-      state.records = meta.sites.concat(meta.supplemental_sites || []);
+      state.records = meta.sites.concat(meta.supplemental_sites || [], meta.unlocated_connection_sites || []);
       loadedMeta = meta;
       showCurrentRoute();
     })
