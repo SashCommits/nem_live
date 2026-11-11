@@ -114,6 +114,14 @@
     ".ps-qs__mw-label{display:inline-flex;align-items:center;gap:.35rem}",
     ".ps-qs__mw-swatch{width:1.25rem;height:3px;display:inline-block;border-radius:2px}",
     ".ps-qs__mw-message,.ps-qs__mw-assets{font-size:.86rem;margin:.7rem 0}",
+    ".ps-qs__connections{border:1px solid var(--qs-rule);border-radius:5px;padding:1rem;margin:1.2rem 0 1.5rem}",
+    ".ps-qs__connections h3{font-size:1.12rem;font-weight:650;margin-bottom:.5rem}",
+    ".ps-qs__connections-note{font-size:.84rem;opacity:.8;margin:.5rem 0 1rem}",
+    ".ps-qs__connection-item{border-top:1px solid var(--qs-rule);padding:.75rem 0;font-size:.87rem}",
+    ".ps-qs__connection-item h4{font:inherit;font-weight:650;margin:0 0 .3rem}",
+    ".ps-qs__connection-meta{font-size:.79rem;opacity:.78;margin:.25rem 0}",
+    ".ps-qs__connection-source{font-size:.8rem;margin:.35rem 0}",
+    ".ps-qs__connection-source a{color:inherit;text-decoration:underline;text-underline-offset:3px}",
     ".ps-qs__mw-chart{overflow:hidden;position:relative;min-height:235px}",
     ".ps-qs__mw-empty-svg{width:100%;height:auto;display:block;min-height:235px;border:1px solid var(--qs-rule);border-radius:3px}",
 
@@ -499,6 +507,45 @@
     load();
   }
 
+
+  // Documented project/network route, NOT the precise physical AEMO CP terminal.
+  // A generator on an upstream route must never be summed as node injection.
+  function renderDocumentedConnections(block, site) {
+    var panel = el("section", "ps-qs__connections");
+    panel.appendChild(el("h3", "", "Documented connecting assets"));
+    var assets = Array.isArray(site.connected_assets) ? site.connected_assets : [];
+    panel.appendChild(el("p", "ps-qs__connections-note", assets.length
+      ? (site.asset_association_note ||
+         "Documented project route; not proof of the AEMO CP's exact electrical position.")
+      : "No independently sourced project-to-substation relationship recorded here yet. This does not mean no assets connect."));
+    assets.forEach(function (a) {
+      var item = el("article", "ps-qs__connection-item");
+      item.appendChild(el("h4", "", toText(a.name, toText(a.duid))));
+      var type = ({
+        project_site_connection: "Documented project-site connection",
+        upstream_transmission_route: "Upstream transmission route — not measured MW at this yard",
+        documented_dedicated_feeder: "Documented dedicated feeder / bay"
+      })[a.relationship_type] || "Sourced network relationship";
+      item.appendChild(el("p", "ps-qs__connection-meta",
+        type + " · DUID " + toText(a.duid) +
+        " · AEMO CP " + toText(a.aemo_connection_point_id)));
+      item.appendChild(el("p", "", toText(a.relationship_summary)));
+      item.appendChild(el("p", "ps-qs__connection-meta",
+        "The AEMO CP's precise electrical boundary remains unverified; this is not measured substation injection."));
+      if (a.evidence_source_url) {
+        var paragraph = el("p", "ps-qs__connection-source");
+        var link = el("a", "", "Powerlink source");
+        link.href = a.evidence_source_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        paragraph.appendChild(link);
+        item.appendChild(paragraph);
+      }
+      panel.appendChild(item);
+    });
+    block.appendChild(panel);
+  }
+
   function showDetail(site, meta) {
     source.hidden = true;
     wrap.replaceChildren();
@@ -513,14 +560,17 @@
     titlebox.appendChild(el("h2", "", site.name));
     titlebox.appendChild(el("p", "ps-qs__intro", site.source_kind === "powerlink_supplemental"
       ? "Powerlink-documented connection site · approximate location · AEMO unit MW history"
-      : "Queensland substation · Geoscience Australia infrastructure record"));
+      : site.source_kind === "powerlink_unlocated"
+        ? "Powerlink-documented site · location not yet linked to GA record"
+        : "Queensland substation · Geoscience Australia infrastructure record"));
     head.appendChild(titlebox);
     block.appendChild(head);
 
     var stats = el("div", "ps-qs__stats");
     [
-      ["Status (GA)", toText(site.status)],
-      ["Voltage (GA)", site.voltage_kv == null ? "Not recorded" : site.voltage_kv + " kV"],
+      [site.ga_objectid == null ? "Status (source)" : "Status (GA)", toText(site.status)],
+      [site.ga_objectid == null ? "Voltage (source)" : "Voltage (GA)",
+       site.voltage_kv == null ? "Not recorded" : site.voltage_kv + " kV"],
       ["Type", toText(site.feature_subtype, toText(site.feature_type))],
       ["Locality", toText(site.locality)]
     ].forEach(function (pair) {
@@ -531,45 +581,59 @@
     });
     block.appendChild(stats);
 
-    renderMWChart(block, site);
+    if (!site.no_map_marker) renderMWChart(block, site);
+    renderDocumentedConnections(block, site);
 
-    var smallMap = el("div", "ps-qs__detailmap");
-    smallMap.setAttribute("aria-label", "Substation geographic location");
-    block.appendChild(smallMap);
+    var smallMap = null;
+    if (site.latitude != null && site.longitude != null && !site.no_map_marker) {
+      smallMap = el("div", "ps-qs__detailmap");
+      smallMap.setAttribute("aria-label", "Substation geographic location");
+      block.appendChild(smallMap);
+    } else {
+      block.appendChild(el("p", "ps-qs__note",
+        "This physical connection site's name and project link have official source evidence, but the corresponding GA record/coordinates are not yet confirmed. No map pin or site-level MW is inferred."));
+    }
     var facts = el("dl", "ps-qs__facts");
     if (site.ga_objectid != null) fact("GA record ID", String(site.ga_objectid), facts);
     else fact("Site record", toText(site.id) + " · Powerlink supplemental (not in GA)", facts);
-    fact("Latitude", site.latitude.toFixed(6), facts);
-    fact("Longitude", site.longitude.toFixed(6), facts);
+    fact("Latitude", site.latitude == null ? "Unverified" : site.latitude.toFixed(6), facts);
+    fact("Longitude", site.longitude == null ? "Unverified" : site.longitude.toFixed(6), facts);
     fact("Feature category", toText(site.feature_type), facts);
     fact("Feature subtype", toText(site.feature_subtype), facts);
     fact("Description", toText(site.description), facts);
-    fact("Location confidence (GA)", toText(site.spatial_confidence), facts);
+    fact(site.source_kind === "powerlink_unlocated" ? "Location confidence" : "Location confidence (GA)",
+      toText(site.location_confidence || site.spatial_confidence), facts);
     fact("GA feature source", toText(site.feature_source), facts);
     fact("Last edited (GA)", readDate(site.last_edited_on), facts);
     block.appendChild(facts);
 
     var notice = el("p", "ps-qs__note", site.source_kind === "powerlink_supplemental"
       ? "Diamondy is documented by Powerlink as Wambo's connection site. This pin is an approximate user-supplied location, not a surveyed switching yard. SCADA reflects instantaneous DUID output, not settlement metering. We do not add independent connection-point headroom estimates to claim substation capacity."
-      : "Substation locations and statuses are displayed as provided by Geoscience Australia. Some features are distribution substations. A GA feature is not proof of Powerlink ownership. Headroom calculations have not yet been assigned to physical substation records.");
+      : site.source_kind === "powerlink_unlocated"
+        ? "This site is identified in a Powerlink connection project, but its GA physical feature is not verified. Do not treat a documented generator route as measured injection at the substation, a formal connection limit or proof of the exact AEMO CP boundary."
+        : "Substation locations and statuses are displayed as provided by Geoscience Australia. Some features are distribution substations. A GA feature is not proof of Powerlink ownership. Headroom calculations have not yet been assigned to physical substation records.");
     block.appendChild(notice);
     var sourceP = el("p", "ps-qs__source");
     var sourceLink = el("a", "", site.source_kind === "powerlink_supplemental"
       ? "Source: Powerlink Wambo Wind Farm Connection Project"
-      : "Source: Geoscience Australia, Electricity Infrastructure (CC BY 4.0)");
+      : site.source_kind === "powerlink_unlocated"
+        ? "Source: Official Powerlink connection project"
+        : "Source: Geoscience Australia, Electricity Infrastructure (CC BY 4.0)");
     sourceLink.href = site.source_url || meta.source_url;
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
     block.appendChild(sourceP);
-    maps.create(smallMap, { center: [site.longitude, site.latitude], zoom: 12 }).then(function (result) {
-      if (!smallMap.isConnected) { result.map.remove(); return; }
-      state.detailMap = result.map;
-      createMarker(site, result.map, result.lib, 18, false);
-      result.map.resize();
-    }).catch(function () {
-      if (smallMap.isConnected) smallMap.textContent = "Map could not be loaded. Coordinates are listed below.";
-    });
+    if (smallMap) {
+      maps.create(smallMap, { center: [site.longitude, site.latitude], zoom: 12 }).then(function (result) {
+        if (!smallMap.isConnected) { result.map.remove(); return; }
+        state.detailMap = result.map;
+        createMarker(site, result.map, result.lib, 18, false);
+        result.map.resize();
+      }).catch(function () {
+        if (smallMap.isConnected) smallMap.textContent = "Map could not be loaded. Coordinates are listed below.";
+      });
+    }
   }
 
   function showMap(meta) {
@@ -642,7 +706,7 @@
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
     sourceP.appendChild(sourceLink);
-    sourceP.appendChild(document.createTextNode(" · GA records are kept separate from the independently sourced Diamondy pilot. Non-zone does not establish Powerlink ownership."));
+    sourceP.appendChild(document.createTextNode(" · GA records remain distinct from the Diamondy pilot. Powerlink connection sites without confirmed GA coordinates appear only in the searchable list, not on the map. Non-zone does not establish Powerlink ownership."));
     wrap.appendChild(sourceP);
 
     function filtered() {
@@ -657,8 +721,9 @@
     function render() {
       var records = filtered();
       count.textContent = records.length + " of " + state.records.length +
-        " Queensland map records shown (" + meta.sites.length + " GA + " +
-        (meta.supplemental_sites || []).length + " supplemental)";
+        " Queensland records listed (" + meta.sites.length + " GA + " +
+        (meta.supplemental_sites || []).length + " supplemental map + " +
+        (meta.unlocated_connection_sites || []).length + " source-backed, location unverified)";
       results.replaceChildren();
       records.slice().sort(function (a,b) {
         return String(a.name).localeCompare(String(b.name)) || Number(a.ga_objectid) - Number(b.ga_objectid);
@@ -669,7 +734,9 @@
         button.appendChild(sw);
         var t = el("span");
         t.appendChild(el("span", "", s.name));
-        t.appendChild(el("small", "", toText(s.locality) + " · " + toText(s.voltage_kv, "Unknown") + " kV · " + (s.ga_objectid == null ? "Powerlink pilot" : "GA #" + s.ga_objectid)));
+        t.appendChild(el("small", "", toText(s.locality) + " · " + toText(s.voltage_kv, "Unknown") + " kV · " +
+          (s.no_map_marker ? "Powerlink documented (not yet geolocated)" :
+           s.ga_objectid == null ? "Powerlink pilot" : "GA #" + s.ga_objectid)));
         button.appendChild(t);
         button.onclick = function () { navigate(s.id); };
         results.appendChild(button);
@@ -677,7 +744,9 @@
       if (records.length > 80) results.appendChild(el("p", "ps-qs__count", "Showing the first 80 names. Search or filter to narrow results."));
       if (state.map && state.lib) {
         state.markers.forEach(function (marker) { marker.remove(); });
-        state.markers = records.map(function (site) {
+        state.markers = records.filter(function (site) {
+          return !site.no_map_marker && site.latitude != null && site.longitude != null;
+        }).map(function (site) {
           return createMarker(site, state.map, state.lib, 12, true);
         });
       }
@@ -717,7 +786,7 @@
     .then(function (meta) {
       if (!meta || !Array.isArray(meta.sites)) throw Error("Invalid substation response");
       // GA remains intact; Diamondy is explicitly a Powerlink-sourced pilot.
-      state.records = meta.sites.concat(meta.supplemental_sites || []);
+      state.records = meta.sites.concat(meta.supplemental_sites || [], meta.unlocated_connection_sites || []);
       loadedMeta = meta;
       showCurrentRoute();
     })
