@@ -1,0 +1,30 @@
+name: Queensland documented connecting assets widget QA
+
+on:
+  pull_request:
+    paths:
+      - "qld-substations-widget.js"
+      - "tests/qld-site-asset-links.test.js"
+      - ".github/workflows/qld-site-asset-links-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qa-site-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check widget JavaScript syntax and documented asset cards
+        run: |
+          node --check qld-substations-widget.js
+          node tests/qld-site-asset-links.test.js
+      - name: Preserve existing substation routes and maps
+        run: |
+          node tests/qld-substation-route.test.js
+          node tests/qld-substation-mw-chart.test.js
